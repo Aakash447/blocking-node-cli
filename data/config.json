@@ -1,0 +1,41 @@
+{
+  "schedules": [
+    {
+      "name": "work-focus",
+      "type": "time",
+      "start": "09:00",
+      "end": "19:00",
+      "websites": [
+        "facebook.com",
+        "x.com"
+      ],
+      "apps": [],
+      "enabled": true,
+      "created": "2026-01-26T10:40:08.842Z"
+    },
+    {
+      "name": "full-block",
+      "type": "time",
+      "start": "23:00",
+      "end": "22:00",
+      "websites": [],
+      "apps": [
+        "chrome.exe",
+        "firefox.exe",
+        "msedge.exe"
+      ],
+      "enabled": true,
+      "created": "2026-01-26T12:48:20.495Z"
+    },
+    {
+      "name": "work-hours",
+      "type": "time",
+      "start": "09:00",
+      "end": "17:00",
+      "websites": [],
+      "apps": [],
+      "enabled": true,
+      "created": "2026-01-26T13:18:34.675Z"
+    }
+  ]
+}
