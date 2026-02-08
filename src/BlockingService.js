@@ -1,9 +1,8 @@
 const fs = require('fs').promises;
 const path = require('path');
-const { spawn, exec } = require('child_process');
+const { exec } = require('child_process');
 const util = require('util');
 const execAsync = util.promisify(exec);
-const os = require('os');
 
 class BlockingService {
   constructor() {
@@ -89,13 +88,35 @@ class BlockingService {
     }
   }
 
+  async waitForServiceStop(maxWaitMs = 15000, pollIntervalMs = 100) {
+    const startTime = Date.now();
+    
+    while (Date.now() - startTime < maxWaitMs) {
+      try {
+        // Check if PID file still exists
+        await fs.access(this.pidFilePath);
+        // File exists, service still running
+        await new Promise(resolve => setTimeout(resolve, pollIntervalMs));
+      } catch (error) {
+        // PID file doesn't exist, service has stopped
+        return true;
+      }
+    }
+    
+    // Timeout reached
+    return false;
+  }
+
   async stop() {
     try {
       // Signal background service to stop
       await fs.writeFile(this.stopFilePath, 'stop', 'utf8');
       
-      // Wait a bit for background service to stop
-      await new Promise(resolve => setTimeout(resolve, 5000));
+      // Poll for service to stop with timeout
+      const serviceStoppedSuccessfully = await this.waitForServiceStop();
+      if (!serviceStoppedSuccessfully) {
+        console.warn('⚠️  Service did not stop within timeout, forcing cleanup...');
+      }
       
       this.isRunning = false;
       try {
@@ -287,7 +308,12 @@ class BlockingService {
       await fs.writeFile(this.hostsPath, newHosts, 'utf8');
       
       // Flush DNS cache
-      await execAsync('ipconfig /flushdns');
+      try {
+        await execAsync('ipconfig /flushdns');
+      } catch (dnsError) {
+        console.warn('⚠️  DNS cache flush failed - websites may not be blocked immediately');
+        console.warn(`   Error: ${dnsError.message}`);
+      }
       
       // Mark that we have modified the hosts file
       this.hostsIsModified = true;
@@ -372,7 +398,12 @@ class BlockingService {
       if (backupExists) {
         const backupContent = await fs.readFile(this.hostsBackupPath, 'utf8');
         await fs.writeFile(this.hostsPath, backupContent, 'utf8');
-        await execAsync('ipconfig /flushdns');
+        try {
+          await execAsync('ipconfig /flushdns');
+        } catch (dnsError) {
+          console.warn('⚠️  DNS cache flush failed during restoration - old entries may persist');
+          console.warn(`   Error: ${dnsError.message}`);
+        }
         console.log('✅ Hosts file restored to original state');
       } else {
         // If no backup, just remove our entries
@@ -381,7 +412,12 @@ class BlockingService {
           .filter(line => !line.includes('# BLOCKED BY CLI'))
           .join('\n');
         await fs.writeFile(this.hostsPath, cleanedHosts, 'utf8');
-        await execAsync('ipconfig /flushdns');
+        try {
+          await execAsync('ipconfig /flushdns');
+        } catch (dnsError) {
+          console.warn('⚠️  DNS cache flush failed during cleanup - old entries may persist');
+          console.warn(`   Error: ${dnsError.message}`);
+        }
         console.log('✅ Removed blocking entries from hosts file');
       }
     } catch (error) {

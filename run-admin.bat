@@ -17,8 +17,8 @@ if %errorLevel% == 0 (
     echo.
     pause
     
-    REM Re-run this script as administrator
-    powershell -Command "Start-Process cmd -ArgumentList '/c cd /d %~dp0 && %~nx0' -Verb RunAs"
+    REM Re-run this script as administrator with proper quoting to prevent command injection
+    powershell -Command "Start-Process cmd -ArgumentList '/c \"%~nx0\"' -WorkingDirectory '%~dp0' -Verb RunAs"
     goto :end
 )
 

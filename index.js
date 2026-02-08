@@ -3,11 +3,9 @@
 const { program } = require('commander');
 const BlockingService = require('./src/BlockingService');
 const ScheduleManager = require('./src/ScheduleManager');
-const ConfigManager = require('./src/ConfigManager');
 
 const blockingService = new BlockingService();
 const scheduleManager = new ScheduleManager(blockingService);
-const configManager = new ConfigManager();
 
 program
   .name('blocking-node-cli')

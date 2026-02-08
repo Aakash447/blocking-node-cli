@@ -42,19 +42,20 @@ class ScheduleManager {
       throw new Error(`Schedule "${name}" already exists`);
     }
 
-    // Validate time format
+    // Validate time format (whenever times are explicitly provided, regardless of type)
     const timeRegex = /^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$/;
-    if (options.type === 'time') {
-      if (!timeRegex.test(options.start) || !timeRegex.test(options.end)) {
-        throw new Error('Time must be in HH:MM format (24-hour)');
-      }
+    const startTime = options.start || '00:00';
+    const endTime = options.end || '23:59';
+    
+    if (!timeRegex.test(startTime) || !timeRegex.test(endTime)) {
+      throw new Error('Time must be in HH:MM format (24-hour)');
     }
 
     const newSchedule = {
       name,
       type: options.type, // 'time', 'alltime', 'morning'
-      start: options.start || '00:00',
-      end: options.end || '23:59',
+      start: startTime,
+      end: endTime,
       websites: [],
       apps: [],
       enabled: true,
