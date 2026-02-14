@@ -118,6 +118,7 @@ class ConfigManager {
       totalSchedules: config.schedules.length,
       enabledSchedules: config.schedules.filter(s => s.enabled).length,
       totalWebsites: 0,
+      totalKeywords: 0,
       totalApps: 0,
       schedulesByType: {
         time: 0,
@@ -128,6 +129,7 @@ class ConfigManager {
 
     config.schedules.forEach(schedule => {
       stats.totalWebsites += schedule.websites ? schedule.websites.length : 0;
+      stats.totalKeywords += schedule.keywords ? schedule.keywords.length : 0;
       stats.totalApps += schedule.apps ? schedule.apps.length : 0;
       
       if (stats.schedulesByType.hasOwnProperty(schedule.type)) {

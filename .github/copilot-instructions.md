@@ -1,110 +1,130 @@
-# Blocking Node CLI - AI Coding Agent Instructions
+# AI Agent Instructions: Blocking Node CLI
 
-## Architecture Overview
+## Project Overview
+Blocking Node CLI is a Windows-only productivity tool that blocks websites and applications based on customizable schedules. It runs as a background service with both interactive CLI and programmatic interfaces.
 
-This is a Windows-specific CLI application that blocks websites and applications using schedule-based rules. Three core classes form the service boundary:
+## Architecture & Component Interactions
 
-- **BlockingService** (`src/BlockingService.js`): System-level enforcement layer that modifies `C:\Windows\System32\drivers\etc\hosts` for website blocking and uses `taskkill` for app termination. Runs continuous monitoring loop (3-second intervals) when active.
-- **ScheduleManager** (`src/ScheduleManager.js`): Business logic for schedule CRUD operations and item management (websites/apps). Normalizes website URLs to `https://www.domain.com` format and auto-appends `.exe` to app names.
-- **ConfigManager** (`src/ConfigManager.js`): JSON persistence layer at `data/config.json` with stats aggregation and import/export utilities.
-
-Data flows: CLI → ScheduleManager → ConfigManager → JSON file → BlockingService reads config → System enforcement (hosts file + taskkill).
-
-## Critical Conventions
-
-### Administrator Privileges Pattern
-Every system-modifying operation checks admin privileges first using `checkAdminPrivileges()` (attempts write to `C:\Windows\Temp`). On failure, displays formatted warning via `displayAdminWarning()` and throws `'Administrator privileges required'`. **Never bypass this check**.
-
-### State Management
-- BlockingService maintains `hostsIsModified` flag to avoid unnecessary restore operations
-- `previouslyBlockedWebsites` and `previouslyBlockedApps` arrays prevent duplicate console logs
-- PID file at `data/service.pid` tracks running service, stop signal file at `data/stop.signal`
-
-### Website Normalization
-ScheduleManager's `normalizeWebsite()` method enforces URL consistency:
-```javascript
-// Input: "facebook.com" or "https://facebook.com"
-// Output: "https://www.facebook.com"
+### Component Structure
 ```
-When modifying hosts file, strips protocol and generates both `www.` and non-`www.` entries for comprehensive blocking.
+index.js (CLI entry point with commander + inquirer)
+  ↓
+ScheduleManager (manages schedule CRUD, config persistence)
+  ↓
+BlockingService (orchestrates blocking logic, proxy, monitoring)
+  ├─ ProxyServer (HTTP/HTTPS proxy on port 3128 for network interception)
+  └─ Windows system integration (hosts file, process management, system proxy)
 
-## Development Workflows
+ConfigManager (parallel config utility - not currently used in production flow)
+```
 
-### Testing/Running Commands
-**Always use PowerShell admin launcher for interactive testing:**
+### Data Flow
+1. User enters schedule configuration via CLI ([index.js](index.js#L40-L150))
+2. ScheduleManager validates and stores in [data/config.json](data/config.json)
+3. BlockingService loads config and creates blocking rules
+4. ProxyServer intercepts traffic; BlockingService kills processes based on active schedule
+5. Monitoring loop checks every 3 seconds if schedule is active (default interval in [ConfigManager](src/ConfigManager.js#L23))
+
+## Critical Implementation Details
+
+### Admin Privileges: Non-Negotiable
+- [BlockingService.checkAdminPrivileges()](src/BlockingService.js#L17-L26) validates at startup
+- Fails silently if not admin; displays `displayAdminWarning()` banner
+- **Every feature requires admin**: modifying system proxy, killing processes, installing services
+- Must test with both PowerShell and Command Prompt admin terminals
+
+### Service Lifecycle
+- **Start**: Enables system proxy → starts proxy server → begins monitoring loop
+- **Stop**: Disables system proxy → closes proxy → clears blocked apps → flushes DNS cache
+- Graceful shutdown on Ctrl+C ([BlockingService.start()](src/BlockingService.js#L58-L80))
+- PID stored in `data/service.pid` for multi-instance checking
+
+### Schedule Validation & Matching
+- Time format: `HH:MM` (24-hour, enforced via regex `/^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$/`)
+- Schedule types: `time` (between start/end), `alltime` (always active), `morning` (legacy, check implementation)
+- Schedule name must be unique (enforced in [ScheduleManager.createSchedule()](src/ScheduleManager.js#L30-L32))
+- Schedule stored with: name, type, start, end, websites[], keywords[], apps[], enabled flag, created timestamp
+
+### Blocking Mechanisms
+1. **Websites**: ProxyServer intercepts HTTP/HTTPS requests, blocks via keyword matching in request headers/body
+2. **Apps**: BlockingService kills processes by name ([search for exec commands](src/BlockingService.js)) using Windows `taskkill /IM`
+3. **DNS Flushing**: Ensures immediate effect after config changes (executor: PowerShell `ipconfig /flushdns`)
+
+## Developer Workflows
+
+### Running Locally
 ```powershell
-# Interactive menu with admin privileges
-.\run-admin.ps1
-
-# Or direct command execution
-node index.js service --start  # Runs in foreground, Ctrl+C to stop
+# Admin PowerShell required
+npm install
+node index.js           # Interactive mode (prompted menu)
+node index.js schedule  # Schedule management (sub-menu)
+node index.js service --start  # Start service with proxy
 ```
 
-Service runs in **foreground** by default (blocking terminal). Use separate terminal for stop command or Ctrl+C for graceful shutdown.
+### Testing Common Scenarios
+- Use `run-admin.ps1` or `run-admin.bat` to elevate privileges automatically
+- Test files exist but test script in package.json is placeholder; no actual test suite
 
-### Configuration Structure
-`data/config.json` schema:
-```json
+### Command Structure
+- Main entry: `node index.js` → interactive menu
+- Sub-commands: `schedule`, `block`, `service` each have CLI flags and interactive fallback
+- Interactive prompts use [inquirer](index.js#L50-L120) with validation (e.g., time format validator)
+
+## Project-Specific Conventions
+
+### File Organization
+- **CLI/UX logic**: [index.js](index.js) (504 lines - command definitions + inquirer prompts)
+- **Business logic**: [src/](src/) (service, scheduling, config management)
+- **Data**: [data/config.json](data/config.json) (persisted config), [data/config.json.example](data/config.json.example) (reference)
+- **Scripts**: `run-admin.ps1`, `run-admin.bat` (elevation helpers), `test.ps1`, `test.bat` (stubs)
+
+### Error Handling Pattern
+- Use try/catch in async functions
+- Error messages prefixed with emoji for CLI clarity (✅ success, ❌ error, ⚠️ warning, 🌐 info)
+- Admin privilege errors show formatted `displayAdminWarning()` banner instead of stack trace
+
+### Configuration Schema
+```javascript
 {
-  "version": "1.0.0",
-  "schedules": [{
-    "name": "work-focus",
-    "type": "time|alltime|morning",
-    "start": "09:00",
-    "end": "17:00",
-    "websites": ["https://www.facebook.com"],
-    "apps": ["chrome.exe"],
-    "enabled": true,
-    "created": "2026-02-05T..."
-  }],
-  "settings": {
-    "checkInterval": 3000,
-    "logLevel": "info"
-  }
+  schedules: [
+    {
+      name: string,           // Unique identifier
+      type: 'time'|'alltime'|'morning',
+      start: "HH:MM",         // 24-hour format
+      end: "HH:MM",
+      websites: string[],     // domain names
+      keywords: string[],     // substring matching in requests
+      apps: string[],         // executable names (e.g., "chrome.exe")
+      enabled: boolean,
+      created: ISO8601 timestamp
+    }
+  ]
 }
 ```
 
-### Schedule Time Logic
-`isScheduleActive()` in BlockingService handles cross-midnight ranges:
-```javascript
-// "23:00" to "05:00" = active from 11 PM to 5 AM next day
-if (startTime <= endTime) { /* same day */ }
-else { /* crosses midnight: now >= start OR now <= end */ }
-```
+### Monitoring Loop
+- Interval: Every 3 seconds (ConfigManager line 23, also hardcoded in BlockingService)
+- Check: Is current time within any active schedule?
+- Action: Apply current schedule's blocked list; log changes only if state differs from previous check
 
-## Integration Points
+## External Dependencies
+- **commander**: CLI argument parsing with sub-commands
+- **inquirer**: Interactive prompts for menu-driven UX  
+- **Node.js built-ins**: fs (config persistence), child_process (exec - kill processes), http/net (proxy)
+- **Platform-specific**: Windows `taskkill`, `ipconfig`, system proxy registry/netsh
 
-### Windows Task Scheduler
-`installService()` creates XML-based scheduled task (`BlockingNodeCLI`) that runs on boot with highest privileges. Task executes: `node index.js service --start`. Uninstall via `schtasks /delete`.
+## Key Files to Study
+1. [index.js](index.js) - Understand how CLI flows and error handling works
+2. [src/BlockingService.js](src/BlockingService.js) - Core blocking logic and service lifecycle
+3. [src/ScheduleManager.js](src/ScheduleManager.js) - How configs are validated and persisted
+4. [src/ProxyServer.js](src/ProxyServer.js) - Network interception mechanism
+5. [README.md](README.md) - Complete feature list and example commands
 
-### DNS Cache Management
-After every hosts file modification, automatically runs `ipconfig /flushdns` via `execAsync` for immediate effect. No manual intervention needed.
+## Common Edge Cases
+- **Overlapping schedules**: Not explicitly prevented; most recent wins (check matching logic)
+- **Time wraparound** (end < start, e.g., 23:00–05:00): Supported via custom calculation
+- **Process already killed**: taskkill will just report process not found; caught in error handling
+- **Config file corruption**: Falls back to default schema and re-creates file
 
-### File Locations
-- Hosts backup: `data/hosts.backup` (created on first service start)
-- Config: `data/config.json` (auto-created with defaults if missing)
-- Process tracking: `data/service.pid`, `data/stop.signal`
 
-## Gotchas
-
-1. **Time format**: 24-hour `HH:MM` format only. Validated with regex `/^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$/`
-2. **App blocking**: Requires `.exe` extension - auto-appended if missing but **check `taskkill` compatibility** with target process name
-3. **Hosts file restoration**: Only occurs when `hostsIsModified === true`. Service cleanup removes `# BLOCKED BY CLI` comment markers
-4. **Error handling**: EPERM errors trigger admin warning display. Process "not found" errors from taskkill are silently ignored (expected behavior)
-5. **Commander.js usage**: All CLI commands use option flags (`-s`, `--start`) not positional args
-
-## Adding Features Checklist
-
-When extending schedule types or blocking mechanisms:
-1. Update `isScheduleActive()` switch statement in BlockingService
-2. Add validation in ScheduleManager's `createSchedule()`
-3. Update ConfigManager's `schedulesByType` aggregation
-4. Modify CLI command options in `index.js` (commander.js)
-5. Consider admin privilege requirements for new system operations
-
-## Key Files Reference
-- Entry point: `index.js` (commander.js CLI definitions)
-- Core logic: `src/BlockingService.js` (400+ lines - hosts/process manipulation)
-- Business rules: `src/ScheduleManager.js` (schedule validation + normalization)
-- Persistence: `src/ConfigManager.js` (JSON config with stats)
-- User docs: `USAGE.md` (workflow examples), `README.md` (architecture explanation)
+dont create .md file on implementing anything

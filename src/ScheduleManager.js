@@ -57,6 +57,7 @@ class ScheduleManager {
       start: startTime,
       end: endTime,
       websites: [],
+      keywords: [],
       apps: [],
       enabled: true,
       created: new Date().toISOString()
@@ -107,6 +108,11 @@ class ScheduleManager {
     return 'https://' + hostname;
   }
 
+  normalizeKeyword(keyword) {
+    // Lowercase and trim whitespace for case-insensitive matching
+    return keyword.toLowerCase().trim();
+  }
+
   async addItemToSchedule(scheduleName, item, type) {
     const config = await this.loadConfig();
     const schedule = config.schedules.find(s => s.name === scheduleName);
@@ -129,6 +135,23 @@ class ScheduleManager {
       if (!schedule.websites.includes(normalizedItem)) {
         schedule.websites.push(normalizedItem);
       }
+    } else if (type === 'keyword') {
+      // Normalize the keyword
+      const normalizedKeyword = this.normalizeKeyword(item);
+      
+      // Validate keyword is not empty
+      if (!normalizedKeyword) {
+        throw new Error('Keyword cannot be empty');
+      }
+      
+      // Ensure keywords array exists
+      if (!schedule.keywords) {
+        schedule.keywords = [];
+      }
+      
+      if (!schedule.keywords.includes(normalizedKeyword)) {
+        schedule.keywords.push(normalizedKeyword);
+      }
     } else if (type === 'app') {
       // Add .exe extension if not present
       const appName = item.endsWith('.exe') ? item : item + '.exe';
@@ -136,7 +159,7 @@ class ScheduleManager {
         schedule.apps.push(appName);
       }
     } else {
-      throw new Error('Type must be either "website" or "app"');
+      throw new Error('Type must be one of: "website", "keyword", or "app"');
     }
 
     await this.saveConfig(config);
@@ -155,6 +178,15 @@ class ScheduleManager {
     const websiteIndex = schedule.websites.indexOf(normalizedItem);
     if (websiteIndex > -1) {
       schedule.websites.splice(websiteIndex, 1);
+    }
+
+    // Remove from keywords
+    if (schedule.keywords) {
+      const normalizedKeyword = this.normalizeKeyword(item);
+      const keywordIndex = schedule.keywords.indexOf(normalizedKeyword);
+      if (keywordIndex > -1) {
+        schedule.keywords.splice(keywordIndex, 1);
+      }
     }
 
     // Remove from apps (try both with and without .exe)

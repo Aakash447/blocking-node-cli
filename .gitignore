@@ -2,3 +2,4 @@
 /package-lock.json
 /data/config.json
 data/service.pid
+*.pid

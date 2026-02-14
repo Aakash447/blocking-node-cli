@@ -3,19 +3,18 @@ const path = require('path');
 const { exec } = require('child_process');
 const util = require('util');
 const execAsync = util.promisify(exec);
+const ProxyServer = require('./ProxyServer');
 
 class BlockingService {
   constructor() {
-    this.hostsPath = 'C:\\Windows\\System32\\drivers\\etc\\hosts';
-    this.hostsBackupPath = path.join(__dirname, '../data/hosts.backup');
     this.isRunning = false;
     this.monitoringInterval = null;
     this.configPath = path.join(__dirname, '../data/config.json');
-    this.hostsIsModified = false; // Track if hosts file has been modified
-    this.previouslyBlockedWebsites = [];
     this.previouslyBlockedApps = [];
     this.pidFilePath = path.join(__dirname, '../data/service.pid');
     this.stopFilePath = path.join(__dirname, '../data/stop.signal');
+    this.proxyServer = new ProxyServer(3128);
+    this.proxyIsRunning = false;
   }
 
   async checkAdminPrivileges() {
@@ -34,7 +33,7 @@ class BlockingService {
     console.log('\n⚠️  ADMINISTRATOR PRIVILEGES REQUIRED ⚠️');
     console.log('━'.repeat(50));
     console.log('This application needs administrator privileges to:');
-    console.log('• Modify the Windows hosts file');
+    console.log('• Configure Windows system proxy');
     console.log('• Kill application processes');
     console.log('• Install system services');
     console.log('');
@@ -54,8 +53,12 @@ class BlockingService {
         throw new Error('Administrator privileges required');
       }
 
-      // Create backup of original hosts file
-      await this.createHostsBackup();
+      // Configure Windows system proxy
+      await this.enableSystemProxy();
+      
+      // Start proxy server
+      await this.proxyServer.start();
+      this.proxyIsRunning = true;
       
       // Start monitoring
       this.isRunning = true;
@@ -129,14 +132,16 @@ class BlockingService {
         this.monitoringInterval = null;
       }
 
-      // Restore original hosts file only if it was modified
-      if (this.hostsIsModified) {
-        await this.restoreHostsFile();
-        this.hostsIsModified = false;
+      // Stop proxy server
+      if (this.proxyIsRunning) {
+        await this.proxyServer.stop();
+        this.proxyIsRunning = false;
       }
 
+      // Reset Windows system proxy
+      await this.disableSystemProxy();
+
       // Clear previous blocking state
-      this.previouslyBlockedWebsites = [];
       this.previouslyBlockedApps = [];
       
       // Clean up stop file
@@ -215,21 +220,26 @@ class BlockingService {
       this.isScheduleActive(schedule, currentTime)
     );
 
-    // Collect all websites and apps to block
+    // Collect all websites, keywords, and apps to block
     let websitesToBlock = [];
+    let keywordsToBlock = [];
     let appsToBlock = [];
 
     activeSchedules.forEach(schedule => {
-      websitesToBlock = [...websitesToBlock, ...schedule.websites];
-      appsToBlock = [...appsToBlock, ...schedule.apps];
+      websitesToBlock = [...websitesToBlock, ...(schedule.websites || [])];
+      keywordsToBlock = [...keywordsToBlock, ...(schedule.keywords || [])];
+      appsToBlock = [...appsToBlock, ...(schedule.apps || [])];
     });
 
     // Remove duplicates
     websitesToBlock = [...new Set(websitesToBlock)];
+    keywordsToBlock = [...new Set(keywordsToBlock)];
     appsToBlock = [...new Set(appsToBlock)];
 
-    // Apply website blocking
-    await this.blockWebsites(websitesToBlock);
+    // Update proxy server with blocked lists
+    if (this.proxyIsRunning) {
+      this.proxyServer.updateBlockedLists(websitesToBlock, keywordsToBlock);
+    }
 
     // Apply app blocking
     await this.blockApps(appsToBlock);
@@ -259,79 +269,23 @@ class BlockingService {
     }
   }
 
-  async blockWebsites(websites) {
-    if (websites.length === 0) {
-      // Only restore if we previously had modifications
-      if (this.hostsIsModified) {
-        await this.restoreHostsFile();
-        this.hostsIsModified = false;
-      }
-      // Clear previous state if no websites to block
-      if (this.previouslyBlockedWebsites.length > 0) {
-        this.previouslyBlockedWebsites = [];
-      }
-      return;
-    }
-
-    // Check if the blocked websites have changed
-    const websitesChanged = JSON.stringify(websites.sort()) !== JSON.stringify(this.previouslyBlockedWebsites.sort());
-
+  async enableSystemProxy() {
     try {
-      // Read current hosts file
-      const originalHosts = await fs.readFile(this.hostsPath, 'utf8');
-      
-      // Remove any existing blocking entries
-      const lines = originalHosts.split('\n').filter(line => 
-        !line.includes('# BLOCKED BY CLI')
-      );
-
-      // Add blocking entries
-      const blockingEntries = [];
-      websites.forEach(website => {
-        try {
-          const url = new URL(website);
-          const hostname = url.hostname;
-          const baseDomain = hostname.startsWith('www.') ? hostname.substring(4) : hostname;
-          
-          blockingEntries.push(`127.0.0.1 ${baseDomain} # BLOCKED BY CLI`);
-          blockingEntries.push(`127.0.0.1 www.${baseDomain} # BLOCKED BY CLI`);
-        } catch (e) {
-          // Fallback if not a valid URL
-          blockingEntries.push(`127.0.0.1 ${website} # BLOCKED BY CLI`);
-          blockingEntries.push(`127.0.0.1 www.${website} # BLOCKED BY CLI`);
-        }
-      });
-
-      const newHosts = lines.join('\n') + '\n' + blockingEntries.join('\n');
-      
-      // Write modified hosts file
-      await fs.writeFile(this.hostsPath, newHosts, 'utf8');
-      
-      // Flush DNS cache
-      try {
-        await execAsync('ipconfig /flushdns');
-      } catch (dnsError) {
-        console.warn('⚠️  DNS cache flush failed - websites may not be blocked immediately');
-        console.warn(`   Error: ${dnsError.message}`);
-      }
-      
-      // Mark that we have modified the hosts file
-      this.hostsIsModified = true;
-      
-      // Only log if the blocked websites have changed
-      if (websitesChanged) {
-        console.log(`🚫 Blocked ${websites.length} website(s): ${websites.join(', ')}`);
-        this.previouslyBlockedWebsites = [...websites];
-      }
-      
+      await execAsync('netsh winhttp set proxy proxy-server="http=127.0.0.1:3128;https=127.0.0.1:3128" bypass-list="localhost"');
+      console.log('✅ System proxy configured');
     } catch (error) {
-      if (error.code === 'EPERM') {
-        console.error('❌ Permission denied: Cannot modify hosts file');
-        console.error('   Please ensure you are running as Administrator');
-        this.displayAdminWarning();
-      } else {
-        console.error('❌ Failed to block websites:', error.message);
-      }
+      console.error('❌ Failed to configure system proxy:', error.message);
+      console.warn('⚠️  Proxy server will start but system proxy is not configured');
+      console.warn('   You may need to manually configure proxy settings');
+    }
+  }
+
+  async disableSystemProxy() {
+    try {
+      await execAsync('netsh winhttp reset proxy');
+      console.log('✅ System proxy reset');
+    } catch (error) {
+      console.error('❌ Failed to reset system proxy:', error.message);
     }
   }
 
@@ -372,63 +326,7 @@ class BlockingService {
     }
   }
 
-  async createHostsBackup() {
-    try {
-      const dataDir = path.dirname(this.hostsBackupPath);
-      await fs.mkdir(dataDir, { recursive: true });
-      
-      const hostsContent = await fs.readFile(this.hostsPath, 'utf8');
-      await fs.writeFile(this.hostsBackupPath, hostsContent, 'utf8');
-      console.log('✅ Created backup of original hosts file');
-    } catch (error) {
-      if (error.code === 'EPERM') {
-        console.error('❌ Permission denied: Cannot read hosts file');
-        this.displayAdminWarning();
-        throw error;
-      } else {
-        console.error('❌ Failed to create hosts backup:', error.message);
-        throw error;
-      }
-    }
-  }
 
-  async restoreHostsFile() {
-    try {
-      const backupExists = await fs.access(this.hostsBackupPath).then(() => true).catch(() => false);
-      if (backupExists) {
-        const backupContent = await fs.readFile(this.hostsBackupPath, 'utf8');
-        await fs.writeFile(this.hostsPath, backupContent, 'utf8');
-        try {
-          await execAsync('ipconfig /flushdns');
-        } catch (dnsError) {
-          console.warn('⚠️  DNS cache flush failed during restoration - old entries may persist');
-          console.warn(`   Error: ${dnsError.message}`);
-        }
-        console.log('✅ Hosts file restored to original state');
-      } else {
-        // If no backup, just remove our entries
-        const currentHosts = await fs.readFile(this.hostsPath, 'utf8');
-        const cleanedHosts = currentHosts.split('\n')
-          .filter(line => !line.includes('# BLOCKED BY CLI'))
-          .join('\n');
-        await fs.writeFile(this.hostsPath, cleanedHosts, 'utf8');
-        try {
-          await execAsync('ipconfig /flushdns');
-        } catch (dnsError) {
-          console.warn('⚠️  DNS cache flush failed during cleanup - old entries may persist');
-          console.warn(`   Error: ${dnsError.message}`);
-        }
-        console.log('✅ Removed blocking entries from hosts file');
-      }
-    } catch (error) {
-      if (error.code === 'EPERM') {
-        console.error('❌ Permission denied: Cannot restore hosts file');
-        console.error('   Please ensure you are running as Administrator');
-      } else {
-        console.error('❌ Failed to restore hosts file:', error.message);
-      }
-    }
-  }
 
   async loadConfig() {
     try {
