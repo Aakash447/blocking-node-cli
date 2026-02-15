@@ -6,8 +6,10 @@
       "start": "00:00",
       "end": "23:59",
       "websites": [
-        "facebook.com",
-        "pinterest.com"
+        "w3schools.com",
+        "example.com",
+        "stackoverflow.com",
+        "mobzway.com"
       ],
       "keywords": [],
       "apps": [],

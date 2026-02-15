@@ -21,7 +21,8 @@ async function showMainMenu() {
         { name: '🚫 Manage Blocked Items', value: 'block' },
         { name: '⚙️  Manage Service', value: 'service' },
         { name: '🧪 Test Proxy Connection', value: 'test-proxy' },
-        { name: '🔍 Debug Information', value: 'debug' },
+        { name: '� Flush DNS Cache', value: 'flush-dns' },
+        { name: '�🔍 Debug Information', value: 'debug' },
         { name: '❌ Exit', value: 'exit' }
       ]
     }
@@ -230,6 +231,27 @@ program
     }
   });
 
+// Flush DNS cache command
+program
+  .command('flush-dns')
+  .description('Flush DNS cache to apply blocking immediately')
+  .action(async () => {
+    try {
+      console.log('🔄 Flushing DNS cache...');
+      const { exec } = require('child_process');
+      const util = require('util');
+      const execAsync = util.promisify(exec);
+      
+      await execAsync('ipconfig /flushdns');
+      console.log('✅ DNS cache flushed successfully');
+      console.log('💡 Blocked sites should now be blocked immediately');
+      console.log('   (no need to wait for cached DNS entries to expire)');
+    } catch (error) {
+      console.error('❌ Error flushing DNS cache:', error.message);
+      console.log('⚠️  You may need to run this as Administrator');
+    }
+  });
+
 // Debug/test command
 program
   .command('debug')
@@ -370,7 +392,7 @@ async function runInteractiveMode() {
         await handleBlockInteractive();
       } else if (command === 'service') {
         await handleServiceInteractive();
-      } else if (command === 'test-proxy' || command === 'debug') {
+      } else if (command === 'test-proxy' || command === 'debug' || command === 'flush-dns') {
         // Run as subprocess to execute the command
         process.argv = ['node', 'index.js', command];
         program.parse(process.argv);
@@ -674,21 +696,30 @@ async function handleServiceInteractive() {
     }
 
     if (action === 'start') {
+      console.clear();
       console.log('🚀 Starting blocking service...');
       console.log('⚠️  This requires administrator privileges');
+      console.log('\n💡 The service will run continuously until you press Ctrl+C\n');
+      
+      // Start service and let it run (don't return to menu)
       await blockingService.start();
-      console.log('✅ Blocking service started\n');
-      await inquirer.prompt([{ type: 'input', name: 'continue', message: 'Press Enter to continue...' }]);
+      // Service runs continuously here, will only exit on Ctrl+C or error
+      // No prompt - let service logs flow freely
+      return; // Exit the interactive loop
     } else if (action === 'stop') {
       console.log('🛑 Stopping blocking service...');
       await blockingService.stop();
       console.log('✅ Blocking service stopped\n');
       await inquirer.prompt([{ type: 'input', name: 'continue', message: 'Press Enter to continue...' }]);
     } else if (action === 'restart') {
+      console.clear();
       console.log('🔄 Restarting blocking service...');
+      console.log('\n💡 The service will run continuously until you press Ctrl+C\n');
+      
       await blockingService.restart();
-      console.log('✅ Blocking service restarted\n');
-      await inquirer.prompt([{ type: 'input', name: 'continue', message: 'Press Enter to continue...' }]);
+      // Service runs continuously here, will only exit on Ctrl+C or error
+      // No prompt - let service logs flow freely
+      return; // Exit the interactive loop
     } else if (action === 'status') {
       const status = await blockingService.getStatus();
       console.log(`\n📊 Service status: ${status ? '🟢 Running' : '🔴 Stopped'}\n`);

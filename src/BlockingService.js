@@ -9,6 +9,7 @@ class BlockingService {
   constructor() {
     this.isRunning = false;
     this.monitoringInterval = null;
+    this.resourceMonitoringInterval = null;
     this.configPath = path.join(__dirname, '../data/config.json');
     this.previouslyBlockedApps = [];
     this.pidFilePath = path.join(__dirname, '../data/service.pid');
@@ -62,7 +63,17 @@ class BlockingService {
       }
 
       // Configure Windows system proxy
-      await this.enableSystemProxy();
+      const proxyEnabled = await this.enableSystemProxy();
+      
+      // Verify proxy was enabled
+      if (proxyEnabled) {
+        await this.verifyProxyEnabled();
+      } else {
+        console.log('\n⚠️  WARNING: Proxy configuration may have failed');
+        console.log('   The service is running but may not intercept traffic properly.');
+        console.log('   You may need to configure proxy manually in browser settings.');
+        console.log('   See TROUBLESHOOTING.md for detailed instructions.\n');
+      }
       
       // Start proxy server
       await this.proxyServer.start();
@@ -72,6 +83,7 @@ class BlockingService {
       this.isRunning = true;
       await fs.writeFile(this.pidFilePath, process.pid.toString(), 'utf8');
       this.startMonitoring();
+      this.startResourceMonitoring();
       
       console.log('✅ Blocking service started successfully');
       console.log('Press Ctrl+C to stop the service');
@@ -85,11 +97,20 @@ class BlockingService {
       // Handle graceful shutdown
       process.on('SIGINT', async () => {
         console.log('\n🛑 Received shutdown signal...');
+        
+        // Set hard timeout - force exit after 5 seconds
+        const forceExitTimeout = setTimeout(() => {
+          console.log('\u26a0\ufe0f  Shutdown timeout reached, forcing exit...');
+          process.exit(0);
+        }, 5000);
+        
         try {
           await this.stop();
+          clearTimeout(forceExitTimeout);
           console.log('✅ Service stopped gracefully');
           process.exit(0);
         } catch (error) {
+          clearTimeout(forceExitTimeout);
           console.error('❌ Error during shutdown:', error.message);
           process.exit(1);
         }
@@ -105,48 +126,22 @@ class BlockingService {
     }
   }
 
-  async waitForServiceStop(maxWaitMs = 15000, pollIntervalMs = 100) {
-    const startTime = Date.now();
-    
-    while (Date.now() - startTime < maxWaitMs) {
-      try {
-        // Check if PID file still exists
-        await fs.access(this.pidFilePath);
-        // File exists, service still running
-        await new Promise(resolve => setTimeout(resolve, pollIntervalMs));
-      } catch (error) {
-        // PID file doesn't exist, service has stopped
-        return true;
-      }
-    }
-    
-    // Timeout reached
-    return false;
-  }
-
   async stop() {
     try {
-      // Signal background service to stop
-      await fs.writeFile(this.stopFilePath, 'stop', 'utf8');
+      console.log('Stop signal received, shutting down...');
       
-      // Poll for service to stop with timeout
-      const serviceStoppedSuccessfully = await this.waitForServiceStop();
-      if (!serviceStoppedSuccessfully) {
-        console.warn('⚠️  Service did not stop within timeout, forcing cleanup...');
-      }
-      
+      // Stop monitoring immediately
       this.isRunning = false;
-      try {
-        await fs.unlink(this.pidFilePath);
-      } catch (error) {
-        // Ignore if file doesn't exist
-      }
       if (this.monitoringInterval) {
         clearInterval(this.monitoringInterval);
         this.monitoringInterval = null;
       }
+      if (this.resourceMonitoringInterval) {
+        clearInterval(this.resourceMonitoringInterval);
+        this.resourceMonitoringInterval = null;
+      }
 
-      // Stop proxy server
+      // Stop proxy server (with forced connection termination)
       if (this.proxyIsRunning) {
         await this.proxyServer.stop();
         this.proxyIsRunning = false;
@@ -158,14 +153,20 @@ class BlockingService {
       // Clear previous blocking state
       this.previouslyBlockedApps = [];
       
+      // Clean up PID file
+      try {
+        await fs.unlink(this.pidFilePath);
+      } catch (error) {
+        // Ignore if file doesn't exist
+      }
+      
       // Clean up stop file
       try {
         await fs.unlink(this.stopFilePath);
       } catch (error) {
-        // Ignore
+        // Ignore if file doesn't exist
       }
       
-      console.log('Blocking service stopped successfully');
       return true;
     } catch (error) {
       console.error('Failed to stop blocking service:', error);
@@ -212,16 +213,6 @@ class BlockingService {
     let cycleCount = 0;
     this.monitoringInterval = setInterval(async () => {
       try {
-        // Check for stop signal
-        try {
-          await fs.access(this.stopFilePath);
-          console.log('Stop signal received, shutting down...');
-          await this.stop();
-          process.exit(0);
-        } catch (error) {
-          // File doesn't exist, continue monitoring
-        }
-        
         cycleCount++;
         
         // Print stats every 20 cycles (approximately every 3-5 minutes)
@@ -243,6 +234,97 @@ class BlockingService {
     // Initial enforcement (verbose)
     console.log('\n🚀 Starting initial blocking enforcement...');
     await this.enforceBlocking(true);
+  }
+
+  async startResourceMonitoring() {
+    console.log('📊 Resource monitoring enabled (updates every 60 seconds)');
+    
+    // Display initial stats
+    await this.displayResourceStats();
+    
+    // Monitor every 60 seconds
+    this.resourceMonitoringInterval = setInterval(async () => {
+      try {
+        await this.displayResourceStats();
+      } catch (error) {
+        console.error('⚠️  Error monitoring resources:', error.message);
+      }
+    }, 60000);
+  }
+
+  async displayResourceStats() {
+    try {
+      const stats = await this.getResourceUsage();
+      const timestamp = new Date().toLocaleTimeString();
+      
+      console.log('\n' + '─'.repeat(70));
+      console.log(`📊 Resource Usage [${timestamp}]`);
+      console.log('─'.repeat(70));
+      console.log(`   💾 RAM Usage:  ${stats.memoryMB.toFixed(2)} MB (${stats.memoryPercent.toFixed(2)}% of system)`);
+      console.log(`   ⚡ CPU Usage:  ${stats.cpuPercent.toFixed(2)}%`);
+      console.log(`   🔢 Process ID: ${process.pid}`);
+      console.log(`   ⏱️  Uptime:     ${this.formatUptime(stats.uptimeSeconds)}`);
+      console.log('─'.repeat(70) + '\n');
+    } catch (error) {
+      console.error('⚠️  Failed to get resource stats:', error.message);
+    }
+  }
+
+  async getResourceUsage() {
+    // Get memory usage
+    const memUsage = process.memoryUsage();
+    const memoryMB = memUsage.rss / 1024 / 1024;
+    
+    // Get system total memory
+    const os = require('os');
+    const totalMemoryMB = os.totalmem() / 1024 / 1024;
+    const memoryPercent = (memoryMB / totalMemoryMB) * 100;
+    
+    // Get CPU usage
+    const cpuPercent = await this.getCPUUsage();
+    
+    // Get uptime
+    const uptimeSeconds = process.uptime();
+    
+    return {
+      memoryMB,
+      memoryPercent,
+      cpuPercent,
+      uptimeSeconds
+    };
+  }
+
+  async getCPUUsage() {
+    return new Promise((resolve) => {
+      const startUsage = process.cpuUsage();
+      const startTime = Date.now();
+      
+      setTimeout(() => {
+        const endUsage = process.cpuUsage(startUsage);
+        const endTime = Date.now();
+        
+        // Calculate CPU percentage
+        const totalMicroseconds = (endUsage.user + endUsage.system);
+        const elapsedTime = (endTime - startTime) * 1000; // Convert to microseconds
+        const cpuPercent = (totalMicroseconds / elapsedTime) * 100;
+        
+        resolve(cpuPercent);
+      }, 100);
+    });
+  }
+
+  formatUptime(seconds) {
+    const hours = Math.floor(seconds / 3600);
+    const minutes = Math.floor((seconds % 3600) / 60);
+    const secs = Math.floor(seconds % 60);
+    
+    if (hours > 0) {
+      return `${hours}h ${minutes}m ${secs}s`;
+    } else if (minutes > 0) {
+      return `${minutes}m ${secs}s`;
+    } else {
+      return `${secs}s`;
+    }
   }
 
   async enforceBlocking(verbose = false) {
@@ -318,85 +400,136 @@ class BlockingService {
   }
 
   async enableSystemProxy() {
-    // Try netsh winhttp first (preferred method)
+    console.log('🔧 Configuring Windows system proxy...');
+    
+    // Method 1: Use PowerShell to set system proxy (same as Windows Settings UI)
+    // This is the most reliable method that browsers will respect
     try {
-      await execAsync('netsh winhttp set proxy proxy-server="http=127.0.0.1:3128;https=127.0.0.1:3128" bypass-list="localhost"');
-      console.log('✅ System proxy configured via netsh');
-      return true;
-    } catch (error) {
-      console.warn('⚠️  netsh command failed, trying registry-based method...');
+      const psScript = `
+        # Set proxy using same method as Windows Settings
+        $proxyServer = "127.0.0.1:3128"
+        $bypassList = "localhost;127.*;10.*;172.16.*;172.31.*;192.168.*;<local>"
+        
+        # Set registry values
+        Set-ItemProperty -Path "HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings" -Name ProxyEnable -Value 1 -Type DWord
+        Set-ItemProperty -Path "HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings" -Name ProxyServer -Value $proxyServer
+        Set-ItemProperty -Path "HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings" -Name ProxyOverride -Value $bypassList
+        
+        # Notify Windows that proxy settings changed (critical for browsers to detect change)
+        Add-Type -TypeDefinition @"
+          using System;
+          using System.Runtime.InteropServices;
+          public class WinInet {
+            [DllImport("wininet.dll")]
+            public static extern bool InternetSetOption(IntPtr hInternet, int dwOption, IntPtr lpBuffer, int dwBufferLength);
+          }
+"@
+        [WinInet]::InternetSetOption([IntPtr]::Zero, 39, [IntPtr]::Zero, 0) | Out-Null
+        [WinInet]::InternetSetOption([IntPtr]::Zero, 37, [IntPtr]::Zero, 0) | Out-Null
+        
+        Write-Output "SUCCESS"
+      `.replace(/\n/g, ' ');
+      
+      const { stdout } = await execAsync(`powershell -Command "${psScript}"`, { timeout: 10000 });
+      
+      if (stdout.includes('SUCCESS')) {
+        console.log('✅ System proxy enabled in Windows Settings');
+        console.log('   → Proxy: 127.0.0.1:3128');
+        console.log('   → Browsers will automatically use this proxy');
+        console.log('   → You may need to restart your browser for it to take effect');
+        
+        // Flush DNS cache to ensure immediate blocking (no cached DNS entries)
+        try {
+          await execAsync('ipconfig /flushdns');
+          console.log('✅ DNS cache flushed - blocking will take effect immediately');
+        } catch (dnsError) {
+          console.warn('⚠️  Could not flush DNS cache:', dnsError.message);
+        }
+        
+        return true;
+      }
+    } catch (psError) {
+      console.warn('⚠️  PowerShell proxy setup failed:', psError.message);
+      console.warn('   Trying alternative methods...');
     }
 
-    // Fallback: Try setting Internet Explorer proxy via registry (works for many apps)
+    // Method 2: Registry-only approach (fallback)
     try {
       const regCommands = [
         'reg add "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings" /v ProxyEnable /t REG_DWORD /d 1 /f',
         'reg add "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings" /v ProxyServer /t REG_SZ /d "127.0.0.1:3128" /f',
-        'reg add "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings" /v ProxyOverride /t REG_SZ /d "localhost;127.*;10.*;172.16.*;172.31.*;192.168.*" /f'
+        'reg add "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings" /v ProxyOverride /t REG_SZ /d "localhost;127.*;10.*;172.16.*;172.31.*;192.168.*;<local>" /f'
       ];
       
       for (const cmd of regCommands) {
         await execAsync(cmd);
       }
       
-      console.log('✅ System proxy configured via registry (IE/Edge compatible)');
-      console.log('🌐 Note: Some apps may require manual proxy configuration');
+      console.log('✅ System proxy configured via registry');
+      console.log('   ⚠️  You MUST restart your browser for changes to take effect');
+      
+      // Flush DNS cache to ensure immediate blocking
+      try {
+        await execAsync('ipconfig /flushdns');
+        console.log('✅ DNS cache flushed - blocking will take effect immediately');
+      } catch (dnsError) {
+        console.warn('⚠️  Could not flush DNS cache:', dnsError.message);
+      }
+      
       return true;
     } catch (regError) {
-      console.error('❌ Failed to configure system proxy via registry:', regError.message);
+      console.error('❌ Failed to configure system proxy:', regError.message);
       this.showProxyConfigHelp();
       return false;
     }
   }
 
   showProxyConfigHelp() {
-    console.log('\n' + '━'.repeat(60));
-    console.log('⚠️  PROXY CONFIGURATION FAILED');
-    console.log('━'.repeat(60));
-    console.log('The service is running but couldn\'t configure system proxy.');
-    console.log('\nPOSSIBLE SOLUTIONS:');
-    console.log('\n1. Run as TRUE Administrator:');
-    console.log('   • Right-click Command Prompt or PowerShell');
-    console.log('   • Select "Run as administrator"');
-    console.log('   • Navigate to this folder and try again');
-    console.log('\n2. Manually configure proxy in Windows Settings:');
-    console.log('   • Open: Settings > Network & Internet > Proxy');
-    console.log('   • Enable: "Use a proxy server"');
-    console.log('   • Address: 127.0.0.1');
+    console.log('\n' + '━'.repeat(70));
+    console.log('⚠️  AUTOMATIC PROXY CONFIGURATION FAILED');
+    console.log('━'.repeat(70));
+    console.log('The service is running but couldn\'t automatically enable proxy.');
+    console.log('\n✋ MANUAL SETUP REQUIRED:');
+    console.log('\n1️⃣  Configure proxy in Windows Settings:');
+    console.log('   • Press: Windows Key + I (opens Settings)');
+    console.log('   • Navigate to: Network & Internet → Proxy');
+    console.log('   • Scroll down to "Manual proxy setup"');
+    console.log('   • Toggle ON: "Use a proxy server"');
+    console.log('   • Proxy IP: 127.0.0.1');
     console.log('   • Port: 3128');
-    console.log('   • Don\'t use proxy for: localhost');
-    console.log('\n3. Configure browser-specific proxy:');
-    console.log('   • Chrome: Settings > System > Open proxy settings');
-    console.log('   • Firefox: Settings > Network Settings > Manual proxy');
-    console.log('\n4. Check Windows permissions:');
-    console.log('   • Type in Command Prompt: net session');
-    console.log('   • Should show "Access is denied" if not admin');
-    console.log('━'.repeat(60) + '\n');
+    console.log('   • Don\'t use proxy for: localhost;127.*;192.168.*;<local>');
+    console.log('   • Click Save');
+    console.log('\n2️⃣  Restart your browser (REQUIRED!)\n');
+    console.log('\n🦊 Firefox users: Set proxy manually in Firefox settings');
+    console.log('   (Firefox ignores Windows proxy settings)');
+    console.log('\n💡 After setup, visit any website to test.');
+    console.log('   You should see connection logs appear in this window.');
+    console.log('━'.repeat(70) + '\n');
   }
 
   showBrowserSetupInstructions() {
     console.log('\n' + '═'.repeat(70));
-    console.log('🌐 IMPORTANT: CONFIGURE YOUR BROWSER TO USE THE PROXY');
+    console.log('🌐 BROWSER CONFIGURATION');
     console.log('═'.repeat(70));
-    console.log('\nThe proxy is running, but browsers need manual configuration:');
-    console.log('\n📱 CHROME / EDGE / BRAVE:');
-    console.log('   1. Open: Settings → System → "Open your computer\'s proxy settings"');
-    console.log('   2. Enable: "Use a proxy server"');
-    console.log('   3. Address: 127.0.0.1  |  Port: 3128');
-    console.log('   4. Add to bypass list: localhost;127.*;192.168.*');
-    console.log('   5. Save and restart browser');
-    console.log('\n🦊 FIREFOX:');
-    console.log('   1. Open: Settings → Network Settings → Settings button');
+    console.log('\n✅ System proxy is now ENABLED automatically (127.0.0.1:3128)');
+    console.log('   This works for: Chrome, Edge, Brave, Opera, and most Windows apps');
+    console.log('\n⚠️  IMPORTANT: You MUST restart your browser to apply the proxy!');
+    console.log('   → Close ALL browser windows completely');
+    console.log('   → Wait 2 seconds');
+    console.log('   → Open browser again');
+    console.log('\n🦊 FIREFOX USERS:');
+    console.log('   Firefox ignores Windows proxy settings. Configure manually:');
+    console.log('   1. Settings → Network Settings → Settings button');
     console.log('   2. Select: "Manual proxy configuration"');
     console.log('   3. HTTP Proxy: 127.0.0.1  |  Port: 3128');
     console.log('   4. HTTPS Proxy: 127.0.0.1  |  Port: 3128');
     console.log('   5. Check: "Use this proxy server for all protocols"');
-    console.log('   6. Add to "No proxy for": localhost, 127.0.0.1');
-    console.log('   7. Click OK (no restart needed)');
-    console.log('\n🚀 QUICK TEST:');
-    console.log('   After configuration, visit any website.');
-    console.log('   You should see logs appear below showing the connection.');
-    console.log('\n💡 TIP: If you don\'t see logs, the proxy isn\'t configured correctly!');
+    console.log('   6. "No proxy for": localhost, 127.0.0.1');
+    console.log('   7. Click OK');
+    console.log('\n🔍 VERIFY IT\'S WORKING:');
+    console.log('   After restarting browser, visit any website.');
+    console.log('   You should see connection logs appear below within seconds.');
+    console.log('\n💡 NO LOGS? Check troubleshooting section below.');
     console.log('═'.repeat(70) + '\n');
   }
 
@@ -431,21 +564,92 @@ class BlockingService {
   }
 
   async disableSystemProxy() {
-    // Try netsh winhttp reset first
+    console.log('🔧 Disabling Windows system proxy...');
+    
+    // Use PowerShell to disable proxy and notify Windows
     try {
-      await execAsync('netsh winhttp reset proxy');
-      console.log('✅ System proxy reset via netsh');
-    } catch (error) {
-      console.warn('⚠️  netsh reset failed, trying registry method...');
+      const psScript = `
+        # Disable proxy
+        Set-ItemProperty -Path "HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings" -Name ProxyEnable -Value 0 -Type DWord
+        
+        # Notify Windows of settings change
+        Add-Type -TypeDefinition @"
+          using System;
+          using System.Runtime.InteropServices;
+          public class WinInet {
+            [DllImport("wininet.dll")]
+            public static extern bool InternetSetOption(IntPtr hInternet, int dwOption, IntPtr lpBuffer, int dwBufferLength);
+          }
+"@
+        [WinInet]::InternetSetOption([IntPtr]::Zero, 39, [IntPtr]::Zero, 0) | Out-Null
+        [WinInet]::InternetSetOption([IntPtr]::Zero, 37, [IntPtr]::Zero, 0) | Out-Null
+        
+        Write-Output "SUCCESS"
+      `.replace(/\n/g, ' ');
+      
+      const { stdout } = await execAsync(`powershell -Command "${psScript}"`, { timeout: 10000 });
+      
+      if (stdout.includes('SUCCESS')) {
+        console.log('✅ System proxy disabled');
+        
+        // Flush DNS cache when disabling proxy too
+        try {
+          await execAsync('ipconfig /flushdns');
+          console.log('✅ DNS cache flushed');
+        } catch (dnsError) {
+          // Ignore DNS flush errors during shutdown
+        }
+        
+        return true;
+      }
+    } catch (psError) {
+      console.warn('⚠️  PowerShell proxy reset failed, trying registry method...');
     }
 
-    // Also try to disable IE/Edge proxy via registry (fallback)
+    // Fallback: Registry-only approach
     try {
       await execAsync('reg add "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings" /v ProxyEnable /t REG_DWORD /d 0 /f');
-      console.log('✅ System proxy reset via registry');
+      console.log('✅ System proxy disabled via registry');
+      console.log('   ℹ️  You may need to restart your browser');
+      
+      // Flush DNS cache when disabling proxy
+      try {
+        await execAsync('ipconfig /flushdns');
+        console.log('✅ DNS cache flushed');
+      } catch (dnsError) {
+        // Ignore DNS flush errors during shutdown
+      }
     } catch (regError) {
-      console.error('❌ Failed to reset system proxy:', regError.message);
+      console.error('❌ Failed to disable system proxy:', regError.message);
       console.log('⚠️  You may need to manually disable proxy in Windows Settings');
+      console.log('   Settings → Network & Internet → Proxy → Toggle OFF');
+    }
+  }
+
+  async verifyProxyEnabled() {
+    try {
+      // Query registry to verify proxy is enabled
+      const { stdout } = await execAsync('reg query "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings" /v ProxyEnable');
+      const proxyEnableValue = stdout.match(/ProxyEnable\s+REG_DWORD\s+(0x[0-9a-fA-F]+)/);
+      
+      if (proxyEnableValue && proxyEnableValue[1] === '0x1') {
+        console.log('✅ Verified: Windows proxy is ENABLED');
+        
+        // Also check the proxy server value
+        const { stdout: serverStdout } = await execAsync('reg query "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings" /v ProxyServer');
+        const proxyServerValue = serverStdout.match(/ProxyServer\s+REG_SZ\s+(.+)/);
+        
+        if (proxyServerValue && proxyServerValue[1].trim() === '127.0.0.1:3128') {
+          console.log('✅ Verified: Proxy server set to 127.0.0.1:3128');
+          return true;
+        }
+      }
+      
+      console.log('⚠️  Warning: Could not verify proxy configuration');
+      return false;
+    } catch (error) {
+      console.log('⚠️  Warning: Could not verify proxy settings');
+      return false;
     }
   }
 
