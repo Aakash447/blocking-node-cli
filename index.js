@@ -391,7 +391,12 @@ async function runInteractiveMode() {
       } else if (command === 'block') {
         await handleBlockInteractive();
       } else if (command === 'service') {
-        await handleServiceInteractive();
+        const shouldExit = await handleServiceInteractive();
+        if (shouldExit) {
+          // Service is running in foreground, exit menu to avoid interference
+          continueMainLoop = false;
+          break;
+        }
       } else if (command === 'test-proxy' || command === 'debug' || command === 'flush-dns') {
         // Run as subprocess to execute the command
         process.argv = ['node', 'index.js', command];
@@ -566,25 +571,98 @@ async function handleBlockInteractive() {
             { name: '🔍 Keyword in URLs (e.g., gambling, adult)', value: 'keyword' },
             { name: '💻 Application (e.g., chrome.exe)', value: 'app' }
           ]
-        },
-        {
-          type: 'input',
-          name: 'item',
-          message: (answers) => {
-            if (answers.type === 'website') {
-              return 'Enter website domain (e.g., facebook.com):';
-            } else if (answers.type === 'keyword') {
-              return 'Enter keyword to block in URLs:';
-            } else {
-              return 'Enter application name (e.g., chrome.exe):';
-            }
-          },
-          validate: (input) => input.trim() ? true : 'This field is required'
         }
       ]);
 
-      await scheduleManager.addItemToSchedule(answers.schedule, answers.item, answers.type);
-      console.log(`✅ ${answers.type} "${answers.item}" added to schedule "${answers.schedule}"\n`);
+      // Handle item selection based on type
+      let item;
+      if (answers.type === 'app') {
+        // Get running applications
+        console.log('🔍 Loading running applications...');
+        const { exec } = require('child_process');
+        const util = require('util');
+        const execAsync = util.promisify(exec);
+        
+        try {
+          const { stdout } = await execAsync('tasklist /FO CSV /NH');
+          const lines = stdout.trim().split('\n');
+          let apps = [...new Set(lines.map(line => {
+            const match = line.match(/^"([^"]+)"/);
+            return match ? match[1] : null;
+          }).filter(Boolean))].sort((a, b) => a.toLowerCase().localeCompare(b.toLowerCase()));
+          
+          console.log('\n💡 TIP: Make sure the application you want to block is currently running!');
+          console.log('   Only running applications appear in this list.\n');
+          
+          // Search/filter option
+          const { searchTerm } = await inquirer.prompt([
+            {
+              type: 'input',
+              name: 'searchTerm',
+              message: 'Filter applications (leave empty to see all):',
+              default: ''
+            }
+          ]);
+          
+          // Filter apps if search term provided
+          if (searchTerm.trim()) {
+            const filtered = apps.filter(app => 
+              app.toLowerCase().includes(searchTerm.toLowerCase())
+            );
+            
+            if (filtered.length === 0) {
+              console.log(`⚠️  No applications found matching "${searchTerm}"`);
+              apps = apps; // Show all apps
+            } else {
+              apps = filtered;
+              console.log(`✅ Found ${filtered.length} application(s) matching "${searchTerm}"`);
+            }
+          }
+          
+          const { selectedApp } = await inquirer.prompt([
+            {
+              type: 'list',
+              name: 'selectedApp',
+              message: 'Select application to block:',
+              choices: [...apps, new inquirer.Separator(), '⬅️  Back to menu'],
+              pageSize: 15
+            }
+          ]);
+          
+          if (selectedApp === '⬅️  Back to menu') {
+            continue;
+          }
+          
+          item = selectedApp;
+        } catch (error) {
+          console.log('⚠️  Failed to load running applications. Using manual input instead.');
+          const { manualApp } = await inquirer.prompt([
+            {
+              type: 'input',
+              name: 'manualApp',
+              message: 'Enter application name (e.g., chrome.exe):',
+              validate: (input) => input.trim() ? true : 'Application name is required'
+            }
+          ]);
+          item = manualApp;
+        }
+      } else {
+        // For website and keyword, use text input
+        const { inputItem } = await inquirer.prompt([
+          {
+            type: 'input',
+            name: 'inputItem',
+            message: answers.type === 'website' 
+              ? 'Enter website domain (e.g., facebook.com):'
+              : 'Enter keyword to block in URLs:',
+            validate: (input) => input.trim() ? true : 'This field is required'
+          }
+        ]);
+        item = inputItem;
+      }
+
+      await scheduleManager.addItemToSchedule(answers.schedule, item, answers.type);
+      console.log(`✅ ${answers.type} "${item}" added to schedule "${answers.schedule}"\n`);
       await inquirer.prompt([{ type: 'input', name: 'continue', message: 'Press Enter to continue...' }]);
     } else if (action === 'remove') {
       const schedules = await scheduleManager.listSchedules();
@@ -704,8 +782,8 @@ async function handleServiceInteractive() {
       // Start service and let it run (don't return to menu)
       await blockingService.start();
       // Service runs continuously here, will only exit on Ctrl+C or error
-      // No prompt - let service logs flow freely
-      return; // Exit the interactive loop
+      // Return true to signal main loop to exit and avoid menu interference
+      return true;
     } else if (action === 'stop') {
       console.log('🛑 Stopping blocking service...');
       await blockingService.stop();
@@ -718,8 +796,8 @@ async function handleServiceInteractive() {
       
       await blockingService.restart();
       // Service runs continuously here, will only exit on Ctrl+C or error
-      // No prompt - let service logs flow freely
-      return; // Exit the interactive loop
+      // Return true to signal main loop to exit and avoid menu interference
+      return true;
     } else if (action === 'status') {
       const status = await blockingService.getStatus();
       console.log(`\n📊 Service status: ${status ? '🟢 Running' : '🔴 Stopped'}\n`);
@@ -760,6 +838,9 @@ async function handleServiceInteractive() {
       await inquirer.prompt([{ type: 'input', name: 'continue', message: 'Press Enter to continue...' }]);
     }
   }
+  
+  // Return false if we're just going back to main menu (not starting service)
+  return false;
 }
 
 // Show main menu if no command provided

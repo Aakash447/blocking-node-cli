@@ -12,7 +12,9 @@
         "mobzway.com"
       ],
       "keywords": [],
-      "apps": [],
+      "apps": [
+        "chrome.exe"
+      ],
       "enabled": true,
       "created": "2026-02-15T04:35:57.561Z"
     }
