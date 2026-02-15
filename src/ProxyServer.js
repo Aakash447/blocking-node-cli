@@ -3,10 +3,11 @@ const net = require('net');
 const { URL } = require('url');
 
 class ProxyServer {
-  constructor(port = 3128) {
+  constructor(port = 3128, debug = true) {
     this.port = port;
     this.server = null;
     this.isRunning = false;
+    this.debug = debug;
     
     // Blocked lists
     this.blockedWebsites = [];
@@ -15,6 +16,20 @@ class ProxyServer {
     // State tracking for logging
     this.previouslyBlockedWebsites = [];
     this.previouslyBlockedKeywords = [];
+    
+    // Request deduplication - track logged hostnames
+    this.loggedHostnames = new Map(); // hostname -> timestamp
+    this.logThrottleTime = 60000; // Only log same hostname once per 60 seconds
+    
+    // Debug statistics
+    this.stats = {
+      totalRequests: 0,
+      blockedRequests: 0,
+      allowedRequests: 0,
+      httpRequests: 0,
+      httpsRequests: 0,
+      uniqueHosts: new Set()
+    };
   }
 
   /**
@@ -42,7 +57,13 @@ class ProxyServer {
 
       this.server.listen(this.port, '127.0.0.1', () => {
         this.isRunning = true;
-        console.log(`🌐 Proxy server running on 127.0.0.1:${this.port}`);
+        console.log(`\n${'═'.repeat(60)}`);
+        console.log(`🌐 Proxy server ACTIVE on 127.0.0.1:${this.port}`);
+        console.log(`${'═'.repeat(60)}`);
+        console.log(`Waiting for connections...`);
+        console.log(`\n💡 Note: Each website is logged only once per minute`);
+        console.log(`   (to avoid spam from ads/trackers)`);
+        console.log(`\nAll traffic will be logged below:\n`);
         resolve();
       });
     });
@@ -155,23 +176,97 @@ class ProxyServer {
   }
 
   /**
+   * Check if we should log this hostname (deduplication)
+   * @param {string} hostname - Hostname to check
+   * @returns {boolean} - True if should log, false if recently logged
+   */
+  shouldLogHostname(hostname) {
+    const now = Date.now();
+    const lastLogged = this.loggedHostnames.get(hostname);
+    
+    // Clean up old entries (older than throttle time)
+    for (const [host, timestamp] of this.loggedHostnames.entries()) {
+      if (now - timestamp > this.logThrottleTime) {
+        this.loggedHostnames.delete(host);
+      }
+    }
+    
+    // Check if we logged this hostname recently
+    if (lastLogged && (now - lastLogged) < this.logThrottleTime) {
+      return false; // Skip logging
+    }
+    
+    // Update timestamp and allow logging
+    this.loggedHostnames.set(hostname, now);
+    return true;
+  }
+
+  /**
+   * Extract hostname from URL
+   * @param {string} urlString - URL or hostname
+   * @returns {string} - Extracted hostname
+   */
+  extractHostname(urlString) {
+    try {
+      const url = new URL(urlString.includes('://') ? urlString : `http://${urlString}`);
+      return url.hostname.toLowerCase();
+    } catch {
+      return urlString.toLowerCase();
+    }
+  }
+
+  /**
    * Handle HTTP requests
    */
   handleHttpRequest(req, res) {
     const fullUrl = req.url;
+    const hostname = this.extractHostname(fullUrl);
+    
+    this.stats.totalRequests++;
+    this.stats.httpRequests++;
+    this.stats.uniqueHosts.add(hostname);
     
     // Check if blocked
     const blockResult = this.isBlocked(fullUrl);
+    
+    // Always log blocked requests, but throttle allowed requests
+    const shouldLog = blockResult.blocked || this.shouldLogHostname(hostname);
+    
+    if (shouldLog) {
+      const timestamp = new Date().toLocaleTimeString();
+      console.log(`\n${'─'.repeat(70)}`);
+      console.log(`📡 [${timestamp}] HTTP Request`);
+      console.log(`   Method: ${req.method}`);
+      console.log(`   Hostname: ${hostname}`);
+      console.log(`   From: ${req.socket.remoteAddress}`);
+      
+      if (blockResult.blocked) {
+        console.log(`   Result: 🚫 BLOCKED (${blockResult.reason})`);
+      } else {
+        console.log(`   Result: ✅ ALLOWED`);
+      }
+      console.log(`${'─'.repeat(70)}`);
+    }
+    
     if (blockResult.blocked) {
-      console.log(`🚫 Blocked HTTP request: ${fullUrl} (${blockResult.reason})`);
-      res.writeHead(403, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({
-        error: 'Blocked by Blocking Node CLI',
-        reason: blockResult.reason,
-        url: fullUrl
-      }));
+      this.stats.blockedRequests++;
+      res.writeHead(403, { 'Content-Type': 'text/html' });
+      res.end(`
+        <!DOCTYPE html>
+        <html>
+        <head><title>Blocked</title></head>
+        <body style="font-family: Arial; text-align: center; padding: 50px;">
+          <h1>🚫 Site Blocked</h1>
+          <p><strong>${fullUrl}</strong></p>
+          <p>Reason: ${blockResult.reason}</p>
+          <p><small>Blocked by Blocking Node CLI</small></p>
+        </body>
+        </html>
+      `);
       return;
     }
+    
+    this.stats.allowedRequests++;
 
     // Forward the request
     const options = {
@@ -202,14 +297,41 @@ class ProxyServer {
   handleConnectRequest(req, clientSocket, head) {
     const { port, hostname } = this.parseConnectRequest(req.url);
     
+    this.stats.totalRequests++;
+    this.stats.httpsRequests++;
+    this.stats.uniqueHosts.add(hostname);
+    
     // Check if blocked
     const blockResult = this.isBlocked(hostname);
+    
+    // Always log blocked requests, but throttle allowed requests
+    const shouldLog = blockResult.blocked || this.shouldLogHostname(hostname);
+    
+    if (shouldLog) {
+      const timestamp = new Date().toLocaleTimeString();
+      console.log(`\n${'─'.repeat(70)}`);
+      console.log(`🔒 [${timestamp}] HTTPS Request`);
+      console.log(`   Method: CONNECT`);
+      console.log(`   Hostname: ${hostname}`);
+      console.log(`   Port: ${port}`);
+      console.log(`   From: ${clientSocket.remoteAddress}`);
+      
+      if (blockResult.blocked) {
+        console.log(`   Result: 🚫 BLOCKED (${blockResult.reason})`);
+      } else {
+        console.log(`   Result: ✅ ALLOWED`);
+      }
+      console.log(`${'─'.repeat(70)}`);
+    }
+    
     if (blockResult.blocked) {
-      console.log(`🚫 Blocked HTTPS CONNECT: ${hostname}:${port} (${blockResult.reason})`);
+      this.stats.blockedRequests++;
       clientSocket.write('HTTP/1.1 403 Forbidden\r\n\r\n');
       clientSocket.end();
       return;
     }
+    
+    this.stats.allowedRequests++;
 
     // Create tunnel to destination
     const serverSocket = net.connect(port, hostname, () => {
@@ -239,6 +361,30 @@ class ProxyServer {
     const [hostname, portStr] = url.split(':');
     const port = parseInt(portStr, 10) || 443;
     return { hostname, port };
+  }
+
+  /**
+   * Get statistics
+   */
+  getStats() {
+    return { ...this.stats };
+  }
+
+  /**
+   * Print statistics
+   */
+  printStats() {
+    console.log('   📊 Proxy Server Statistics:');
+    console.log(`      Total requests: ${this.stats.totalRequests}`);
+    console.log(`      Unique websites: ${this.stats.uniqueHosts.size}`);
+    console.log(`      ├─ HTTP: ${this.stats.httpRequests}`);
+    console.log(`      └─ HTTPS: ${this.stats.httpsRequests}`);
+    console.log(`      Blocked: ${this.stats.blockedRequests} 🚫`);
+    console.log(`      Allowed: ${this.stats.allowedRequests} ✅`);
+    
+    if (this.stats.totalRequests === 0) {
+      console.log(`      ⚠️  No traffic detected - check browser proxy settings!`);
+    }
   }
 }
 

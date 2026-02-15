@@ -19,11 +19,19 @@ class BlockingService {
 
   async checkAdminPrivileges() {
     try {
-      // Try to write a test file to a system directory
+      // Test 1: Try to write a test file to a system directory
       const testPath = 'C:\\Windows\\Temp\\admin_test.txt';
       await fs.writeFile(testPath, 'test', 'utf8');
       await fs.unlink(testPath);
-      return true;
+      
+      // Test 2: Verify we can actually run netsh commands (critical for proxy config)
+      try {
+        await execAsync('netsh winhttp show proxy');
+        return true;
+      } catch (netshError) {
+        console.warn('⚠️  Warning: netsh command access denied - may need full administrator rights');
+        return false;
+      }
     } catch (error) {
       return false;
     }
@@ -67,6 +75,12 @@ class BlockingService {
       
       console.log('✅ Blocking service started successfully');
       console.log('Press Ctrl+C to stop the service');
+      
+      // Show browser configuration instructions
+      this.showBrowserSetupInstructions();
+      
+      // Start traffic monitoring to warn if no requests detected
+      this.startTrafficMonitoring();
       
       // Handle graceful shutdown
       process.on('SIGINT', async () => {
@@ -189,7 +203,13 @@ class BlockingService {
   }
 
   async startMonitoring() {
-    // Monitor every 3 seconds
+    // Load check interval from config
+    const config = await this.loadConfig();
+    const checkInterval = config.settings?.checkInterval || 10000;
+    
+    console.log(`⏱️  Monitoring interval: ${checkInterval}ms (checks every ${checkInterval/1000} seconds)`);
+    
+    let cycleCount = 0;
     this.monitoringInterval = setInterval(async () => {
       try {
         // Check for stop signal
@@ -201,17 +221,31 @@ class BlockingService {
         } catch (error) {
           // File doesn't exist, continue monitoring
         }
-        await this.enforceBlocking();
+        
+        cycleCount++;
+        
+        // Print stats every 20 cycles (approximately every 3-5 minutes)
+        if (cycleCount % 20 === 0) {
+          console.log(`\n${'═'.repeat(70)}`);
+          console.log(`⏰ [${new Date().toLocaleTimeString()}] Monitoring Status - Cycle: ${cycleCount}`);
+          if (this.proxyServer && this.proxyIsRunning) {
+            this.proxyServer.printStats();
+          }
+          console.log(`${'═'.repeat(70)}\n`);
+        }
+        
+        await this.enforceBlocking(false); // Not verbose during monitoring
       } catch (error) {
         console.error('Error during monitoring:', error);
       }
-    }, 3000);
+    }, checkInterval);
 
-    // Initial enforcement
-    await this.enforceBlocking();
+    // Initial enforcement (verbose)
+    console.log('\n🚀 Starting initial blocking enforcement...');
+    await this.enforceBlocking(true);
   }
 
-  async enforceBlocking() {
+  async enforceBlocking(verbose = false) {
     const config = await this.loadConfig();
     const currentTime = new Date();
     
@@ -219,6 +253,13 @@ class BlockingService {
     const activeSchedules = config.schedules.filter(schedule => 
       this.isScheduleActive(schedule, currentTime)
     );
+
+    if (verbose) {
+      console.log(`\n📋 Active schedules: ${activeSchedules.length} of ${config.schedules.length}`);
+      activeSchedules.forEach(s => {
+        console.log(`   ✓ ${s.name} (${s.type})`);
+      });
+    }
 
     // Collect all websites, keywords, and apps to block
     let websitesToBlock = [];
@@ -235,6 +276,13 @@ class BlockingService {
     websitesToBlock = [...new Set(websitesToBlock)];
     keywordsToBlock = [...new Set(keywordsToBlock)];
     appsToBlock = [...new Set(appsToBlock)];
+
+    if (verbose) {
+      console.log(`\n🎯 Blocking targets:`);
+      console.log(`   Websites: ${websitesToBlock.length ? websitesToBlock.join(', ') : 'none'}`);
+      console.log(`   Keywords: ${keywordsToBlock.length ? keywordsToBlock.join(', ') : 'none'}`);
+      console.log(`   Apps: ${appsToBlock.length ? appsToBlock.join(', ') : 'none'}`);
+    }
 
     // Update proxy server with blocked lists
     if (this.proxyIsRunning) {
@@ -270,22 +318,134 @@ class BlockingService {
   }
 
   async enableSystemProxy() {
+    // Try netsh winhttp first (preferred method)
     try {
       await execAsync('netsh winhttp set proxy proxy-server="http=127.0.0.1:3128;https=127.0.0.1:3128" bypass-list="localhost"');
-      console.log('✅ System proxy configured');
+      console.log('✅ System proxy configured via netsh');
+      return true;
     } catch (error) {
-      console.error('❌ Failed to configure system proxy:', error.message);
-      console.warn('⚠️  Proxy server will start but system proxy is not configured');
-      console.warn('   You may need to manually configure proxy settings');
+      console.warn('⚠️  netsh command failed, trying registry-based method...');
+    }
+
+    // Fallback: Try setting Internet Explorer proxy via registry (works for many apps)
+    try {
+      const regCommands = [
+        'reg add "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings" /v ProxyEnable /t REG_DWORD /d 1 /f',
+        'reg add "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings" /v ProxyServer /t REG_SZ /d "127.0.0.1:3128" /f',
+        'reg add "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings" /v ProxyOverride /t REG_SZ /d "localhost;127.*;10.*;172.16.*;172.31.*;192.168.*" /f'
+      ];
+      
+      for (const cmd of regCommands) {
+        await execAsync(cmd);
+      }
+      
+      console.log('✅ System proxy configured via registry (IE/Edge compatible)');
+      console.log('🌐 Note: Some apps may require manual proxy configuration');
+      return true;
+    } catch (regError) {
+      console.error('❌ Failed to configure system proxy via registry:', regError.message);
+      this.showProxyConfigHelp();
+      return false;
     }
   }
 
+  showProxyConfigHelp() {
+    console.log('\n' + '━'.repeat(60));
+    console.log('⚠️  PROXY CONFIGURATION FAILED');
+    console.log('━'.repeat(60));
+    console.log('The service is running but couldn\'t configure system proxy.');
+    console.log('\nPOSSIBLE SOLUTIONS:');
+    console.log('\n1. Run as TRUE Administrator:');
+    console.log('   • Right-click Command Prompt or PowerShell');
+    console.log('   • Select "Run as administrator"');
+    console.log('   • Navigate to this folder and try again');
+    console.log('\n2. Manually configure proxy in Windows Settings:');
+    console.log('   • Open: Settings > Network & Internet > Proxy');
+    console.log('   • Enable: "Use a proxy server"');
+    console.log('   • Address: 127.0.0.1');
+    console.log('   • Port: 3128');
+    console.log('   • Don\'t use proxy for: localhost');
+    console.log('\n3. Configure browser-specific proxy:');
+    console.log('   • Chrome: Settings > System > Open proxy settings');
+    console.log('   • Firefox: Settings > Network Settings > Manual proxy');
+    console.log('\n4. Check Windows permissions:');
+    console.log('   • Type in Command Prompt: net session');
+    console.log('   • Should show "Access is denied" if not admin');
+    console.log('━'.repeat(60) + '\n');
+  }
+
+  showBrowserSetupInstructions() {
+    console.log('\n' + '═'.repeat(70));
+    console.log('🌐 IMPORTANT: CONFIGURE YOUR BROWSER TO USE THE PROXY');
+    console.log('═'.repeat(70));
+    console.log('\nThe proxy is running, but browsers need manual configuration:');
+    console.log('\n📱 CHROME / EDGE / BRAVE:');
+    console.log('   1. Open: Settings → System → "Open your computer\'s proxy settings"');
+    console.log('   2. Enable: "Use a proxy server"');
+    console.log('   3. Address: 127.0.0.1  |  Port: 3128');
+    console.log('   4. Add to bypass list: localhost;127.*;192.168.*');
+    console.log('   5. Save and restart browser');
+    console.log('\n🦊 FIREFOX:');
+    console.log('   1. Open: Settings → Network Settings → Settings button');
+    console.log('   2. Select: "Manual proxy configuration"');
+    console.log('   3. HTTP Proxy: 127.0.0.1  |  Port: 3128');
+    console.log('   4. HTTPS Proxy: 127.0.0.1  |  Port: 3128');
+    console.log('   5. Check: "Use this proxy server for all protocols"');
+    console.log('   6. Add to "No proxy for": localhost, 127.0.0.1');
+    console.log('   7. Click OK (no restart needed)');
+    console.log('\n🚀 QUICK TEST:');
+    console.log('   After configuration, visit any website.');
+    console.log('   You should see logs appear below showing the connection.');
+    console.log('\n💡 TIP: If you don\'t see logs, the proxy isn\'t configured correctly!');
+    console.log('═'.repeat(70) + '\n');
+  }
+
+  startTrafficMonitoring() {
+    // Check if proxy is receiving traffic after 30 seconds
+    setTimeout(() => {
+      if (this.proxyServer && this.proxyIsRunning) {
+        const stats = this.proxyServer.getStats();
+        if (stats.totalRequests === 0) {
+          console.log('\n' + '⚠'.repeat(70));
+          console.log('⚠️  WARNING: NO TRAFFIC DETECTED AFTER 30 SECONDS!');
+          console.log('⚠'.repeat(70));
+          console.log('\nThe proxy server is running but hasn\'t received any requests.');
+          console.log('This means your browser is NOT configured to use the proxy.');
+          console.log('\n🔧 TROUBLESHOOTING:');
+          console.log('   1. Did you configure your browser proxy settings?');
+          console.log('      → Chrome/Edge: Settings → System → Open proxy settings');
+          console.log('      → Firefox: Settings → Network Settings → Manual proxy');
+          console.log('   2. Set proxy to: 127.0.0.1:3128');
+          console.log('   3. Save settings and RESTART your browser');
+          console.log('   4. Try visiting any website');
+          console.log('   5. Watch for logs to appear in this window');
+          console.log('\n📖 For detailed instructions, check the documentation.');
+          console.log('⚠'.repeat(70) + '\n');
+        } else {
+          console.log('\n✅ Traffic detected! Proxy is working correctly.');
+          console.log(`   Total requests processed: ${stats.totalRequests}`);
+          console.log(`   Blocked: ${stats.blockedRequests} | Allowed: ${stats.allowedRequests}\n`);
+        }
+      }
+    }, 30000); // 30 seconds
+  }
+
   async disableSystemProxy() {
+    // Try netsh winhttp reset first
     try {
       await execAsync('netsh winhttp reset proxy');
-      console.log('✅ System proxy reset');
+      console.log('✅ System proxy reset via netsh');
     } catch (error) {
-      console.error('❌ Failed to reset system proxy:', error.message);
+      console.warn('⚠️  netsh reset failed, trying registry method...');
+    }
+
+    // Also try to disable IE/Edge proxy via registry (fallback)
+    try {
+      await execAsync('reg add "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings" /v ProxyEnable /t REG_DWORD /d 0 /f');
+      console.log('✅ System proxy reset via registry');
+    } catch (regError) {
+      console.error('❌ Failed to reset system proxy:', regError.message);
+      console.log('⚠️  You may need to manually disable proxy in Windows Settings');
     }
   }
 

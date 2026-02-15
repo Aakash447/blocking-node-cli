@@ -1,26 +1,24 @@
 {
   "schedules": [
     {
-      "name": "testing-schedule",
-      "type": "time",
-      "start": "05:12",
-      "end": "06:23",
-      "websites": [],
-      "keywords": [],
-      "apps": [],
-      "enabled": true,
-      "created": "2026-02-14T08:43:02.193Z"
-    },
-    {
-      "name": "ghgh",
-      "type": "morning",
+      "name": "full-day",
+      "type": "alltime",
       "start": "00:00",
       "end": "23:59",
-      "websites": [],
+      "websites": [
+        "facebook.com",
+        "pinterest.com"
+      ],
       "keywords": [],
       "apps": [],
       "enabled": true,
-      "created": "2026-02-14T09:03:04.657Z"
+      "created": "2026-02-15T04:35:57.561Z"
     }
-  ]
+  ],
+  "settings": {
+    "checkInterval": 10000,
+    "logLevel": "info",
+    "autoStart": false,
+    "enabledByDefault": true
+  }
 }

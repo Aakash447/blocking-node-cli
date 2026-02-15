@@ -20,6 +20,8 @@ async function showMainMenu() {
         { name: '📅 Manage Schedules', value: 'schedule' },
         { name: '🚫 Manage Blocked Items', value: 'block' },
         { name: '⚙️  Manage Service', value: 'service' },
+        { name: '🧪 Test Proxy Connection', value: 'test-proxy' },
+        { name: '🔍 Debug Information', value: 'debug' },
         { name: '❌ Exit', value: 'exit' }
       ]
     }
@@ -52,114 +54,7 @@ program
     try {
       // Interactive mode if no options provided
       if (!options.create && !options.list && !options.delete) {
-        let continueLoop = true;
-        while (continueLoop) {
-          console.clear();
-          const { action } = await inquirer.prompt([
-            {
-              type: 'list',
-              name: 'action',
-              message: 'What would you like to do?',
-              choices: [
-                { name: '➕ Create new schedule', value: 'create' },
-                { name: '📋 List all schedules', value: 'list' },
-                { name: '🗑️  Delete a schedule', value: 'delete' },
-                { name: '❌ Cancel', value: 'cancel' }
-              ]
-            }
-          ]);
-
-          if (action === 'cancel') {
-            console.log('Cancelled');
-            continueLoop = false;
-            break;
-          }
-
-          if (action === 'create') {
-          const answers = await inquirer.prompt([
-            {
-              type: 'input',
-              name: 'name',
-              message: 'Enter schedule name:',
-              validate: (input) => input.trim() ? true : 'Schedule name is required'
-            },
-            {
-              type: 'list',
-              name: 'type',
-              message: 'Select schedule type:',
-              choices: [
-                { name: 'Time-based (specific hours)', value: 'time' },
-                { name: 'All day (24/7)', value: 'alltime' },
-                { name: 'Morning only', value: 'morning' }
-              ]
-            },
-            {
-              type: 'input',
-              name: 'start',
-              message: 'Start time - 24-hour format (example: 09:00):',
-              default: '00:00',
-              validate: (input) => /^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$/.test(input) ? true : 'Invalid time format. Use HH:MM like 09:00 or 14:30'
-            },
-            {
-              type: 'input',
-              name: 'end',
-              message: 'End time - 24-hour format (example: 17:00):',
-              default: '23:59',
-              validate: (input) => /^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$/.test(input) ? true : 'Invalid time format. Use HH:MM like 09:00 or 14:30'
-            }
-          ]);
-
-            await scheduleManager.createSchedule(answers.name, {
-              start: answers.start,
-              end: answers.end,
-              type: answers.type
-            });
-            console.log(`✅ Schedule "${answers.name}" created successfully\n`);
-          } else if (action === 'list') {
-            const schedules = await scheduleManager.listSchedules();
-            if (schedules.length === 0) {
-              console.log('No schedules found. Create one first!\n');
-            } else {
-              console.log('\n📋 Schedules:');
-              schedules.forEach(schedule => {
-                console.log(`  • ${schedule.name}: ${schedule.start} - ${schedule.end} (${schedule.type})`);
-              });
-              console.log('');
-            }
-            await inquirer.prompt([{ type: 'input', name: 'continue', message: 'Press Enter to continue...' }]);
-          } else if (action === 'delete') {
-            const schedules = await scheduleManager.listSchedules();
-            if (schedules.length === 0) {
-              console.log('No schedules found.\n');
-              continue;
-            }
-
-            const { scheduleName } = await inquirer.prompt([
-              {
-                type: 'list',
-                name: 'scheduleName',
-                message: 'Select schedule to delete:',
-                choices: schedules.map(s => ({ name: s.name, value: s.name }))
-              }
-            ]);
-
-            const { confirm } = await inquirer.prompt([
-              {
-                type: 'confirm',
-                name: 'confirm',
-                message: `Are you sure you want to delete "${scheduleName}"?`,
-                default: false
-              }
-            ]);
-
-            if (confirm) {
-              await scheduleManager.deleteSchedule(scheduleName);
-              console.log(`✅ Schedule "${scheduleName}" deleted successfully\n`);
-            } else {
-              console.log('Cancelled\n');
-            }
-          }
-        }
+        await handleScheduleInteractive();
         return;
       }
 
@@ -203,148 +98,7 @@ program
     try {
       // Interactive mode if no options provided
       if (!options.add && !options.remove && !options.list) {
-        let continueLoop = true;
-        while (continueLoop) {
-          console.clear();
-          const { action } = await inquirer.prompt([
-            {
-              type: 'list',
-              name: 'action',
-              message: 'What would you like to do?',
-              choices: [
-                { name: '➕ Add item to block', value: 'add' },
-                { name: '➖ Remove item from block', value: 'remove' },
-                { name: '📋 List all blocked items', value: 'list' },
-                { name: '❌ Cancel', value: 'cancel' }
-              ]
-            }
-          ]);
-
-          if (action === 'cancel') {
-            console.log('Cancelled');
-            continueLoop = false;
-            break;
-          }
-
-          if (action === 'add') {
-            const schedules = await scheduleManager.listSchedules();
-            if (schedules.length === 0) {
-              console.log('❌ No schedules found. Please create a schedule first using: node index.js schedule\n');
-              continue;
-            }
-
-            const answers = await inquirer.prompt([
-              {
-                type: 'list',
-                name: 'schedule',
-                message: 'Select schedule:',
-                choices: schedules.map(s => ({ name: `${s.name} (${s.start} - ${s.end})`, value: s.name }))
-              },
-              {
-                type: 'list',
-                name: 'type',
-                message: 'What do you want to block?',
-                choices: [
-                  { name: '🌐 Website (e.g., facebook.com)', value: 'website' },
-                  { name: '🔍 Keyword in URLs (e.g., gambling, adult)', value: 'keyword' },
-                  { name: '💻 Application (e.g., chrome.exe)', value: 'app' }
-                ]
-              },
-              {
-                type: 'input',
-                name: 'item',
-                message: (answers) => {
-                  if (answers.type === 'website') {
-                    return 'Enter website domain (e.g., facebook.com):';
-                  } else if (answers.type === 'keyword') {
-                    return 'Enter keyword to block in URLs:';
-                  } else {
-                    return 'Enter application name (e.g., chrome.exe):';
-                  }
-                },
-                validate: (input) => input.trim() ? true : 'This field is required'
-              }
-            ]);
-
-            await scheduleManager.addItemToSchedule(answers.schedule, answers.item, answers.type);
-            console.log(`✅ ${answers.type} "${answers.item}" added to schedule "${answers.schedule}"\n`);
-          } else if (action === 'remove') {
-            const schedules = await scheduleManager.listSchedules();
-            if (schedules.length === 0) {
-              console.log('❌ No schedules found.\n');
-              continue;
-            }
-
-            const { schedule } = await inquirer.prompt([
-              {
-                type: 'list',
-                name: 'schedule',
-                message: 'Select schedule:',
-                choices: schedules.map(s => ({ name: s.name, value: s }))
-              }
-            ]);
-
-            // Build list of all items
-            const items = [];
-            if (schedule.websites) {
-              schedule.websites.forEach(w => items.push({ name: `🌐 Website: ${w}`, value: w }));
-            }
-            if (schedule.keywords) {
-              schedule.keywords.forEach(k => items.push({ name: `🔍 Keyword: ${k}`, value: k }));
-            }
-            if (schedule.apps) {
-              schedule.apps.forEach(a => items.push({ name: `💻 App: ${a}`, value: a }));
-            }
-
-            if (items.length === 0) {
-              console.log('❌ No items found in this schedule.\n');
-              continue;
-            }
-
-            const { item } = await inquirer.prompt([
-              {
-                type: 'list',
-                name: 'item',
-                message: 'Select item to remove:',
-                choices: items
-              }
-            ]);
-
-            await scheduleManager.removeItemFromSchedule(schedule.name, item);
-            console.log(`✅ Item "${item}" removed from schedule "${schedule.name}"\n`);
-          } else if (action === 'list') {
-            const schedules = await scheduleManager.listSchedules();
-            if (schedules.length === 0) {
-              console.log('No schedules found.\n');
-              continue;
-            }
-
-            console.log('\n📋 Blocked Items by Schedule:\n');
-            schedules.forEach(schedule => {
-              console.log(`📅 Schedule: ${schedule.name}`);
-              let hasItems = false;
-
-              if (schedule.websites && schedule.websites.length > 0) {
-                hasItems = true;
-                schedule.websites.forEach(site => console.log(`   🌐 Website: ${site}`));
-              }
-              if (schedule.keywords && schedule.keywords.length > 0) {
-                hasItems = true;
-                schedule.keywords.forEach(kw => console.log(`   🔍 Keyword: ${kw}`));
-              }
-              if (schedule.apps && schedule.apps.length > 0) {
-                hasItems = true;
-                schedule.apps.forEach(app => console.log(`   💻 App: ${app}`));
-              }
-
-              if (!hasItems) {
-                console.log('   (no items blocked)');
-              }
-              console.log('');
-            });
-            await inquirer.prompt([{ type: 'input', name: 'continue', message: 'Press Enter to continue...' }]);
-          }
-        }
+        await handleBlockInteractive();
         return;
       }
 
@@ -387,6 +141,168 @@ program
     }
   });
 
+// Test proxy connectivity
+program
+  .command('test-proxy')
+  .description('Test if proxy server is receiving traffic')
+  .action(async () => {
+    try {
+      console.log('\n🧪 PROXY CONNECTIVITY TEST\n');
+      console.log('═'.repeat(60));
+      
+      // Check if service is running
+      const isRunning = await blockingService.getStatus();
+      if (!isRunning) {
+        console.log('❌ Service is not running. Start it first with: node index.js service --start');
+        return;
+      }
+      
+      console.log('✅ Service is running');
+      
+      // Check if port is listening
+      const { exec } = require('child_process');
+      const util = require('util');
+      const execAsync = util.promisify(exec);
+      
+      try {
+        const { stdout } = await execAsync('netstat -an | findstr "3128"');
+        if (stdout.includes('LISTENING')) {
+          console.log('✅ Proxy server is listening on port 3128');
+        } else {
+          console.log('❌ Port 3128 is NOT listening');
+          return;
+        }
+      } catch (error) {
+        console.log('❌ Port 3128 is NOT listening');
+        return;
+      }
+      
+      // Try to make a request through the proxy
+      console.log('\n📡 Testing proxy by making a request through 127.0.0.1:3128...');
+      console.log('   Target: http://example.com');
+      
+      const http = require('http');
+      
+      const options = {
+        host: '127.0.0.1',
+        port: 3128,
+        path: 'http://example.com',
+        method: 'GET',
+        headers: {
+          'Host': 'example.com',
+          'User-Agent': 'BlockingNodeCLI-Test/1.0'
+        }
+      };
+      
+      const req = http.request(options, (res) => {
+        console.log(`\n✅ SUCCESS! Proxy responded with status: ${res.statusCode}`);
+        console.log('   This means your proxy is working correctly!');
+        console.log('\n💡 Next steps:');
+        console.log('   1. Configure your browser to use proxy: 127.0.0.1:3128');
+        console.log('   2. In Chrome/Edge: Settings → System → Open proxy settings');
+        console.log('   3. In Firefox: Settings → Network Settings → Manual proxy');
+        console.log('   4. Try accessing facebook.com or pinterest.com');
+        console.log('   5. Watch the service terminal for blocking logs');
+        console.log('\n═'.repeat(60));
+        
+        res.on('data', () => {}); // Consume response
+      });
+      
+      req.on('error', (err) => {
+        console.log(`\n❌ FAILED to connect to proxy!`);
+        console.log(`   Error: ${err.message}`);
+        console.log('\n💡 Possible issues:');
+        console.log('   1. Proxy server not actually running');
+        console.log('   2. Port 3128 blocked by firewall');
+        console.log('   3. Another process using port 3128');
+        console.log('\n═'.repeat(60));
+      });
+      
+      req.setTimeout(5000, () => {
+        console.log('\n⏱️  Request timed out - proxy may not be responding');
+        req.destroy();
+      });
+      
+      req.end();
+      
+    } catch (error) {
+      console.error('❌ Error:', error.message);
+    }
+  });
+
+// Debug/test command
+program
+  .command('debug')
+  .description('Debug and test blocking functionality')
+  .action(async () => {
+    try {
+      console.log('\n🔍 BLOCKING SERVICE DEBUG INFORMATION\n');
+      console.log('═'.repeat(60));
+      
+      // Check if service is running
+      const isRunning = await blockingService.getStatus();
+      console.log(`\n📊 Service Status: ${isRunning ? '🟢 Running' : '🔴 Stopped'}`);
+      
+      if (!isRunning) {
+        console.log('\n⚠️  Service is not running. Start it with: node index.js service --start');
+        console.log('⚠️  Or test proxy connectivity with: node index.js test-proxy');
+        return;
+      }
+      
+      // Load and display config
+      const config = await scheduleManager.listSchedules();
+      console.log(`\n📅 Schedules: ${config.length} total`);
+      
+      config.forEach(schedule => {
+        console.log(`\n   • ${schedule.name} (${schedule.type}):`);
+        console.log(`     Time: ${schedule.start} - ${schedule.end}`);
+        console.log(`     Websites: [${(schedule.websites || []).join(', ')}]`);
+        console.log(`     Keywords: [${(schedule.keywords || []).join(', ')}]`);
+        console.log(`     Apps: [${(schedule.apps || []).join(', ')}]`);
+      });
+      
+      // Check proxy configuration
+      console.log('\n🌐 Windows Proxy Configuration:');
+      try {
+        const { exec } = require('child_process');
+        const util = require('util');
+        const execAsync = util.promisify(exec);
+        const { stdout } = await execAsync('netsh winhttp show proxy');
+        console.log(stdout);
+      } catch (error) {
+        console.log('   ❌ Could not read proxy settings');
+      }
+      
+      // Check if port is listening
+      console.log('🔌 Proxy Server Port Check:');
+      try {
+        const { exec } = require('child_process');
+        const util = require('util');
+        const execAsync = util.promisify(exec);
+        const { stdout } = await execAsync('netstat -an | findstr "3128"');
+        if (stdout.includes('LISTENING')) {
+          console.log('   ✅ Port 3128 is LISTENING');
+        } else {
+          console.log('   ❌ Port 3128 is NOT listening');
+        }
+        console.log(stdout);
+      } catch (error) {
+        console.log('   ❌ Port 3128 is NOT listening');
+      }
+      
+      console.log('\n💡 Troubleshooting Tips:');
+      console.log('   1. Make sure service is running: node index.js service --start');
+      console.log('   2. Run as Administrator (required for proxy setup)');
+      console.log('   3. Configure browser to use proxy 127.0.0.1:3128');
+      console.log('   4. Try accessing a blocked site - watch logs in service terminal');
+      console.log('   5. For Firefox: Manual proxy config required (see README)');
+      console.log('\n═'.repeat(60));
+      
+    } catch (error) {
+      console.error('❌ Error:', error.message);
+    }
+  });
+
 // Service management commands
 program
   .command('service')
@@ -401,90 +317,7 @@ program
     try {
       // Interactive mode if no options provided
       if (!options.start && !options.stop && !options.restart && !options.status && !options.install && !options.uninstall) {
-        let continueLoop = true;
-        while (continueLoop) {
-          console.clear();
-          const { action } = await inquirer.prompt([
-            {
-              type: 'list',
-              name: 'action',
-              message: 'Service Management - What would you like to do?',
-              choices: [
-                { name: '▶️  Start blocking service', value: 'start' },
-                { name: '⏹️  Stop blocking service', value: 'stop' },
-                { name: '🔄 Restart blocking service', value: 'restart' },
-                { name: '📊 Check service status', value: 'status' },
-                { name: '⚙️  Install service (run on boot)', value: 'install' },
-                { name: '🗑️  Uninstall service', value: 'uninstall' },
-                { name: '❌ Cancel', value: 'cancel' }
-              ]
-            }
-          ]);
-
-          if (action === 'cancel') {
-            console.log('Cancelled');
-            continueLoop = false;
-            break;
-          }
-
-          if (action === 'start') {
-            console.log('🚀 Starting blocking service...');
-            console.log('⚠️  This requires administrator privileges');
-            await blockingService.start();
-            console.log('✅ Blocking service started\n');
-            await inquirer.prompt([{ type: 'input', name: 'continue', message: 'Press Enter to continue...' }]);
-          } else if (action === 'stop') {
-            console.log('🛑 Stopping blocking service...');
-            await blockingService.stop();
-            console.log('✅ Blocking service stopped\n');
-            await inquirer.prompt([{ type: 'input', name: 'continue', message: 'Press Enter to continue...' }]);
-          } else if (action === 'restart') {
-            console.log('🔄 Restarting blocking service...');
-            await blockingService.restart();
-            console.log('✅ Blocking service restarted\n');
-            await inquirer.prompt([{ type: 'input', name: 'continue', message: 'Press Enter to continue...' }]);
-          } else if (action === 'status') {
-            const status = await blockingService.getStatus();
-            console.log(`\n📊 Service status: ${status ? '🟢 Running' : '🔴 Stopped'}\n`);
-            await inquirer.prompt([{ type: 'input', name: 'continue', message: 'Press Enter to continue...' }]);
-          } else if (action === 'install') {
-            const { confirm } = await inquirer.prompt([
-              {
-                type: 'confirm',
-                name: 'confirm',
-                message: 'Install service to start automatically on boot?',
-                default: false
-              }
-            ]);
-
-            if (confirm) {
-              await blockingService.installService();
-              console.log('✅ Service installed to start on boot\n');
-              await inquirer.prompt([{ type: 'input', name: 'continue', message: 'Press Enter to continue...' }]);
-            } else {
-              console.log('Cancelled\n');
-              await inquirer.prompt([{ type: 'input', name: 'continue', message: 'Press Enter to continue...' }]);
-            }
-          } else if (action === 'uninstall') {
-            const { confirm } = await inquirer.prompt([
-              {
-                type: 'confirm',
-                name: 'confirm',
-                message: 'Uninstall service from automatic startup?',
-                default: false
-              }
-            ]);
-
-            if (confirm) {
-              await blockingService.uninstallService();
-              console.log('✅ Service uninstalled from boot\n');
-              await inquirer.prompt([{ type: 'input', name: 'continue', message: 'Press Enter to continue...' }]);
-            } else {
-              console.log('Cancelled\n');
-              await inquirer.prompt([{ type: 'input', name: 'continue', message: 'Press Enter to continue...' }]);
-            }
-          }
-        }
+        await handleServiceInteractive();
         return;
       }
 
@@ -517,15 +350,392 @@ program
     }
   });
 
+// Main interactive loop
+async function runInteractiveMode() {
+  let continueMainLoop = true;
+  
+  while (continueMainLoop) {
+    const command = await showMainMenu();
+    
+    if (command === 'exit') {
+      continueMainLoop = false;
+      break;
+    }
+    
+    // Execute the selected command in interactive mode
+    try {
+      if (command === 'schedule') {
+        await handleScheduleInteractive();
+      } else if (command === 'block') {
+        await handleBlockInteractive();
+      } else if (command === 'service') {
+        await handleServiceInteractive();
+      } else if (command === 'test-proxy' || command === 'debug') {
+        // Run as subprocess to execute the command
+        process.argv = ['node', 'index.js', command];
+        program.parse(process.argv);
+        await inquirer.prompt([{ type: 'input', name: 'continue', message: '\nPress Enter to continue...' }]);
+      }
+    } catch (error) {
+      console.error('❌ Error:', error.message);
+      await inquirer.prompt([{ type: 'input', name: 'continue', message: 'Press Enter to continue...' }]);
+    }
+  }
+}
+
+// Extract interactive handlers
+async function handleScheduleInteractive() {
+  let continueLoop = true;
+  while (continueLoop) {
+    console.clear();
+    const { action } = await inquirer.prompt([
+      {
+        type: 'list',
+        name: 'action',
+        message: 'What would you like to do?',
+        choices: [
+          { name: '➕ Create new schedule', value: 'create' },
+          { name: '📋 List all schedules', value: 'list' },
+          { name: '🗑️  Delete a schedule', value: 'delete' },
+          { name: '⬅️  Back to main menu', value: 'cancel' }
+        ]
+      }
+    ]);
+
+    if (action === 'cancel') {
+      continueLoop = false;
+      break;
+    }
+
+    if (action === 'create') {
+      const answers = await inquirer.prompt([
+        {
+          type: 'input',
+          name: 'name',
+          message: 'Enter schedule name:',
+          validate: (input) => input.trim() ? true : 'Schedule name is required'
+        },
+        {
+          type: 'list',
+          name: 'type',
+          message: 'Select schedule type:',
+          choices: [
+            { name: 'Time-based (specific hours)', value: 'time' },
+            { name: 'All day (24/7)', value: 'alltime' },
+            { name: 'Morning only', value: 'morning' }
+          ]
+        },
+        {
+          type: 'input',
+          name: 'start',
+          message: 'Start time - 24-hour format (example: 09:00):',
+          default: '00:00',
+          validate: (input) => /^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$/.test(input) ? true : 'Invalid time format. Use HH:MM like 09:00 or 14:30'
+        },
+        {
+          type: 'input',
+          name: 'end',
+          message: 'End time - 24-hour format (example: 17:00):',
+          default: '23:59',
+          validate: (input) => /^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$/.test(input) ? true : 'Invalid time format. Use HH:MM like 09:00 or 14:30'
+        }
+      ]);
+
+      await scheduleManager.createSchedule(answers.name, {
+        start: answers.start,
+        end: answers.end,
+        type: answers.type
+      });
+      console.log(`✅ Schedule "${answers.name}" created successfully\n`);
+      await inquirer.prompt([{ type: 'input', name: 'continue', message: 'Press Enter to continue...' }]);
+    } else if (action === 'list') {
+      const schedules = await scheduleManager.listSchedules();
+      if (schedules.length === 0) {
+        console.log('No schedules found. Create one first!\n');
+      } else {
+        console.log('\n📋 Schedules:');
+        schedules.forEach(schedule => {
+          console.log(`  • ${schedule.name}: ${schedule.start} - ${schedule.end} (${schedule.type})`);
+        });
+        console.log('');
+      }
+      await inquirer.prompt([{ type: 'input', name: 'continue', message: 'Press Enter to continue...' }]);
+    } else if (action === 'delete') {
+      const schedules = await scheduleManager.listSchedules();
+      if (schedules.length === 0) {
+        console.log('No schedules found.\n');
+        await inquirer.prompt([{ type: 'input', name: 'continue', message: 'Press Enter to continue...' }]);
+        continue;
+      }
+
+      const { scheduleName } = await inquirer.prompt([
+        {
+          type: 'list',
+          name: 'scheduleName',
+          message: 'Select schedule to delete:',
+          choices: schedules.map(s => ({ name: s.name, value: s.name }))
+        }
+      ]);
+
+      const { confirm } = await inquirer.prompt([
+        {
+          type: 'confirm',
+          name: 'confirm',
+          message: `Are you sure you want to delete "${scheduleName}"?`,
+          default: false
+        }
+      ]);
+
+      if (confirm) {
+        await scheduleManager.deleteSchedule(scheduleName);
+        console.log(`✅ Schedule "${scheduleName}" deleted successfully\n`);
+      } else {
+        console.log('Cancelled\n');
+      }
+      await inquirer.prompt([{ type: 'input', name: 'continue', message: 'Press Enter to continue...' }]);
+    }
+  }
+}
+
+async function handleBlockInteractive() {
+  let continueLoop = true;
+  while (continueLoop) {
+    console.clear();
+    const { action } = await inquirer.prompt([
+      {
+        type: 'list',
+        name: 'action',
+        message: 'What would you like to do?',
+        choices: [
+          { name: '➕ Add item to block', value: 'add' },
+          { name: '➖ Remove item from block', value: 'remove' },
+          { name: '📋 List all blocked items', value: 'list' },
+          { name: '⬅️  Back to main menu', value: 'cancel' }
+        ]
+      }
+    ]);
+
+    if (action === 'cancel') {
+      continueLoop = false;
+      break;
+    }
+
+    if (action === 'add') {
+      const schedules = await scheduleManager.listSchedules();
+      if (schedules.length === 0) {
+        console.log('❌ No schedules found. Please create a schedule first using: node index.js schedule\n');
+        await inquirer.prompt([{ type: 'input', name: 'continue', message: 'Press Enter to continue...' }]);
+        continue;
+      }
+
+      const answers = await inquirer.prompt([
+        {
+          type: 'list',
+          name: 'schedule',
+          message: 'Select schedule:',
+          choices: schedules.map(s => ({ name: `${s.name} (${s.start} - ${s.end})`, value: s.name }))
+        },
+        {
+          type: 'list',
+          name: 'type',
+          message: 'What do you want to block?',
+          choices: [
+            { name: '🌐 Website (e.g., facebook.com)', value: 'website' },
+            { name: '🔍 Keyword in URLs (e.g., gambling, adult)', value: 'keyword' },
+            { name: '💻 Application (e.g., chrome.exe)', value: 'app' }
+          ]
+        },
+        {
+          type: 'input',
+          name: 'item',
+          message: (answers) => {
+            if (answers.type === 'website') {
+              return 'Enter website domain (e.g., facebook.com):';
+            } else if (answers.type === 'keyword') {
+              return 'Enter keyword to block in URLs:';
+            } else {
+              return 'Enter application name (e.g., chrome.exe):';
+            }
+          },
+          validate: (input) => input.trim() ? true : 'This field is required'
+        }
+      ]);
+
+      await scheduleManager.addItemToSchedule(answers.schedule, answers.item, answers.type);
+      console.log(`✅ ${answers.type} "${answers.item}" added to schedule "${answers.schedule}"\n`);
+      await inquirer.prompt([{ type: 'input', name: 'continue', message: 'Press Enter to continue...' }]);
+    } else if (action === 'remove') {
+      const schedules = await scheduleManager.listSchedules();
+      if (schedules.length === 0) {
+        console.log('❌ No schedules found.\n');
+        await inquirer.prompt([{ type: 'input', name: 'continue', message: 'Press Enter to continue...' }]);
+        continue;
+      }
+
+      const { schedule } = await inquirer.prompt([
+        {
+          type: 'list',
+          name: 'schedule',
+          message: 'Select schedule:',
+          choices: schedules.map(s => ({ name: s.name, value: s }))
+        }
+      ]);
+
+      // Build list of all items
+      const items = [];
+      if (schedule.websites) {
+        schedule.websites.forEach(w => items.push({ name: `🌐 Website: ${w}`, value: w }));
+      }
+      if (schedule.keywords) {
+        schedule.keywords.forEach(k => items.push({ name: `🔍 Keyword: ${k}`, value: k }));
+      }
+      if (schedule.apps) {
+        schedule.apps.forEach(a => items.push({ name: `💻 App: ${a}`, value: a }));
+      }
+
+      if (items.length === 0) {
+        console.log('❌ No items found in this schedule.\n');
+        await inquirer.prompt([{ type: 'input', name: 'continue', message: 'Press Enter to continue...' }]);
+        continue;
+      }
+
+      const { item } = await inquirer.prompt([
+        {
+          type: 'list',
+          name: 'item',
+          message: 'Select item to remove:',
+          choices: items
+        }
+      ]);
+
+      await scheduleManager.removeItemFromSchedule(schedule.name, item);
+      console.log(`✅ Item "${item}" removed from schedule "${schedule.name}"\n`);
+      await inquirer.prompt([{ type: 'input', name: 'continue', message: 'Press Enter to continue...' }]);
+    } else if (action === 'list') {
+      const schedules = await scheduleManager.listSchedules();
+      if (schedules.length === 0) {
+        console.log('No schedules found.\n');
+        await inquirer.prompt([{ type: 'input', name: 'continue', message: 'Press Enter to continue...' }]);
+        continue;
+      }
+
+      console.log('\n📋 Blocked Items by Schedule:\n');
+      schedules.forEach(schedule => {
+        console.log(`📅 Schedule: ${schedule.name}`);
+        let hasItems = false;
+
+        if (schedule.websites && schedule.websites.length > 0) {
+          hasItems = true;
+          schedule.websites.forEach(site => console.log(`   🌐 Website: ${site}`));
+        }
+        if (schedule.keywords && schedule.keywords.length > 0) {
+          hasItems = true;
+          schedule.keywords.forEach(kw => console.log(`   🔍 Keyword: ${kw}`));
+        }
+        if (schedule.apps && schedule.apps.length > 0) {
+          hasItems = true;
+          schedule.apps.forEach(app => console.log(`   💻 App: ${app}`));
+        }
+
+        if (!hasItems) {
+          console.log('   (no items blocked)');
+        }
+        console.log('');
+      });
+      await inquirer.prompt([{ type: 'input', name: 'continue', message: 'Press Enter to continue...' }]);
+    }
+  }
+}
+
+async function handleServiceInteractive() {
+  let continueLoop = true;
+  while (continueLoop) {
+    console.clear();
+    const { action } = await inquirer.prompt([
+      {
+        type: 'list',
+        name: 'action',
+        message: 'Service Management - What would you like to do?',
+        choices: [
+          { name: '▶️  Start blocking service', value: 'start' },
+          { name: '⏹️  Stop blocking service', value: 'stop' },
+          { name: '🔄 Restart blocking service', value: 'restart' },
+          { name: '📊 Check service status', value: 'status' },
+          { name: '⚙️  Install service (run on boot)', value: 'install' },
+          { name: '🗑️  Uninstall service', value: 'uninstall' },
+          { name: '⬅️  Back to main menu', value: 'cancel' }
+        ]
+      }
+    ]);
+
+    if (action === 'cancel') {
+      continueLoop = false;
+      break;
+    }
+
+    if (action === 'start') {
+      console.log('🚀 Starting blocking service...');
+      console.log('⚠️  This requires administrator privileges');
+      await blockingService.start();
+      console.log('✅ Blocking service started\n');
+      await inquirer.prompt([{ type: 'input', name: 'continue', message: 'Press Enter to continue...' }]);
+    } else if (action === 'stop') {
+      console.log('🛑 Stopping blocking service...');
+      await blockingService.stop();
+      console.log('✅ Blocking service stopped\n');
+      await inquirer.prompt([{ type: 'input', name: 'continue', message: 'Press Enter to continue...' }]);
+    } else if (action === 'restart') {
+      console.log('🔄 Restarting blocking service...');
+      await blockingService.restart();
+      console.log('✅ Blocking service restarted\n');
+      await inquirer.prompt([{ type: 'input', name: 'continue', message: 'Press Enter to continue...' }]);
+    } else if (action === 'status') {
+      const status = await blockingService.getStatus();
+      console.log(`\n📊 Service status: ${status ? '🟢 Running' : '🔴 Stopped'}\n`);
+      await inquirer.prompt([{ type: 'input', name: 'continue', message: 'Press Enter to continue...' }]);
+    } else if (action === 'install') {
+      const { confirm } = await inquirer.prompt([
+        {
+          type: 'confirm',
+          name: 'confirm',
+          message: 'Install service to start automatically on boot?',
+          default: false
+        }
+      ]);
+
+      if (confirm) {
+        await blockingService.installService();
+        console.log('✅ Service installed to start on boot\n');
+      } else {
+        console.log('Cancelled\n');
+      }
+      await inquirer.prompt([{ type: 'input', name: 'continue', message: 'Press Enter to continue...' }]);
+    } else if (action === 'uninstall') {
+      const { confirm } = await inquirer.prompt([
+        {
+          type: 'confirm',
+          name: 'confirm',
+          message: 'Uninstall service from automatic startup?',
+          default: false
+        }
+      ]);
+
+      if (confirm) {
+        await blockingService.uninstallService();
+        console.log('✅ Service uninstalled from boot\n');
+      } else {
+        console.log('Cancelled\n');
+      }
+      await inquirer.prompt([{ type: 'input', name: 'continue', message: 'Press Enter to continue...' }]);
+    }
+  }
+}
+
 // Show main menu if no command provided
 (async () => {
   // Check if no command was provided
   if (process.argv.length === 2) {
-    const command = await showMainMenu();
-    
-    // Inject the command into argv and re-parse
-    process.argv.push(command);
-    program.parse(process.argv);
+    await runInteractiveMode();
   } else {
     program.parse();
   }
